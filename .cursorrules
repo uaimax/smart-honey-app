@@ -1,0 +1,234 @@
+# Regras do Projeto Smart Honey
+
+## Linguagem
+- Todo código e comentários em **Inglês**
+- Documentação e mensagens de usuário em **Português**
+
+## TypeScript
+- Usar TypeScript strict mode
+- Sempre tipar props, state e retornos de função
+- Evitar `any` - usar `unknown` se necessário
+- Preferir interfaces para objetos públicos
+- Preferir types para unions e composições
+
+## Componentes React Native
+- **Functional components** apenas (sem class components)
+- Hooks para lógica e side effects
+- Props tipadas com TypeScript
+- Exports nomeados preferíveis a default exports
+
+## Estrutura de Arquivos
+```
+src/
+├── components/       # Componentes reutilizáveis UI
+├── screens/          # Telas do app
+├── navigation/       # React Navigation setup
+├── services/         # Lógica de negócio, API calls
+├── hooks/            # Custom hooks
+├── context/          # Context API providers
+├── types/            # Tipos TypeScript compartilhados
+├── theme/            # Design system (cores, espaçamentos)
+└── utils/            # Funções utilitárias puras
+
+docs/
+├── integration/      # Documentos de integração API
+├── fixes/            # Registros de correções
+├── changelog/        # Histórico de mudanças
+├── reports/          # Relatórios de implementação
+├── checklists/       # Checklists e verificações
+├── guides/           # Guias de uso
+├── testing/          # Documentação de testes
+└── troubleshooting/  # Guias de solução de problemas
+
+__tests__/            # Testes unitários e integração
+e2e/                  # Testes end-to-end
+scripts/              # Scripts de automação
+```
+
+## Organização de Arquivos CRÍTICO
+- NUNCA criar arquivos na raiz do projeto
+- ÚNICO arquivo .md permitido na raiz: README.md
+- Arquivos de configuração na raiz: package.json, tsconfig.json, app.json, babel.config.js, eas.json
+- TODOS os outros arquivos devem estar em pastas apropriadas:
+  - Documentação -> docs/[categoria]/
+  - Testes -> __tests__/ ou e2e/
+  - Scripts -> scripts/
+  - Código -> src/[categoria]/
+- Evitar criar .md desnecessários
+- Quando criar .md: ser sucinto e objetivo, texto simples, sem formatação excessiva
+- Proibido usar ## e ** em documentos .md (usar texto puro)
+
+## Nomenclatura
+- **Componentes:** `PascalCase.tsx` (ex: `SmartInput.tsx`)
+- **Hooks:** `camelCase.ts` com prefixo `use` (ex: `useAudioRecorder.ts`)
+- **Services:** `camelCase.ts` (ex: `api.ts`)
+- **Types/Interfaces:** `PascalCase` (ex: `Draft`, `ApiResponse`)
+- **Constantes:** `UPPER_SNAKE_CASE` (ex: `API_BASE_URL`)
+- **Variáveis/funções:** `camelCase`
+
+## Estilo e Formatação
+- Usar espaços (2 spaces)
+- Aspas simples para strings
+- Semicolons obrigatórios
+- Trailing commas em objetos e arrays
+- Max line length: 100 caracteres
+
+## Componentes
+```typescript
+// ✅ BOM
+interface SmartInputProps {
+  value: string;
+  onSubmit: (text: string) => void;
+  placeholder?: string;
+}
+
+export const SmartInput: React.FC<SmartInputProps> = ({
+  value,
+  onSubmit,
+  placeholder
+}) => {
+  // implementation
+};
+
+// ❌ RUIM
+export default function SmartInput(props: any) {
+  // implementation
+}
+```
+
+## Hooks Customizados
+- Sempre começar com `use`
+- Retornar objetos para múltiplos valores
+- Documentar dependências e side effects
+
+```typescript
+// ✅ BOM
+export const useAudioRecorder = () => {
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioUri, setAudioUri] = useState<string | null>(null);
+
+  return { isRecording, audioUri, startRecording, stopRecording };
+};
+```
+
+## Services e API
+- Centralizar todas as chamadas de API em `services/api.ts`
+- Usar try/catch para error handling
+- Sempre retornar objetos tipados
+- Logs para debugging
+
+```typescript
+// ✅ BOM
+export const submitDraft = async (params: SubmitDraftParams): Promise<ApiResponse> => {
+  try {
+    const formData = new FormData();
+    // ... setup
+    const response = await api.post('/api/external/drafts', formData);
+    return response.data;
+  } catch (error) {
+    console.error('Submit draft failed:', error);
+    throw error;
+  }
+};
+```
+
+## Estado e Context
+- Context API para estado global (cartões, usuário, drafts)
+- useState para estado local do componente
+- useReducer para lógica complexa de estado
+- Evitar prop drilling - usar context quando necessário
+
+## Performance
+- Usar `React.memo` para componentes pesados
+- `useMemo` e `useCallback` apenas quando necessário (não otimizar prematuramente)
+- FlatList para listas longas (nunca ScrollView com .map)
+- Lazy loading de imagens
+- Debounce em inputs de busca
+
+## Navegação
+- Tipar todas as rotas e params
+- Usar hooks de navegação (`useNavigation`, `useRoute`)
+- Deep linking configurado corretamente
+
+## Estilo
+- StyleSheet.create para estilos
+- Theme context para cores e espaçamentos
+- Componentes de UI reutilizáveis em `components/`
+- Evitar inline styles em produção
+
+```typescript
+// ✅ BOM
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.background,
+  },
+});
+
+// ❌ RUIM (exceto prototipação)
+<View style={{ flex: 1, padding: 16 }}>
+```
+
+## Tratamento de Erros
+- Try/catch em operações assíncronas
+- Feedback visual de erros ao usuário
+- Log de erros para debugging
+- Fallbacks graciosos
+
+## Testes
+- Testar manualmente via Expo Go primeiro
+- Testes automatizados quando a funcionalidade estabilizar
+- Jest + React Native Testing Library
+- Testar fluxos críticos (envio de draft, fila offline)
+
+## Git e Commits
+- Commits descritivos em inglês
+- Formato: `tipo: descrição` (ex: `feat: add audio recording`)
+- Tipos: feat, fix, docs, refactor, test, chore
+- Branches descritivas
+
+## Dependências
+- Preferir dependências mantidas e populares
+- Verificar compatibilidade com Expo
+- Manter package.json limpo
+- Documentar por que cada dependência foi adicionada
+
+## Segurança
+- Nunca commitar secrets ou API keys
+- Usar environment variables (.env)
+- Validar inputs do usuário
+- Sanitizar dados antes de enviar para API
+
+## Acessibilidade
+- Labels descritivos em botões
+- Contraste adequado (WCAG AA)
+- Touch targets mínimo 44pt
+- Suporte a screen readers (quando relevante)
+
+## Princípios Gerais
+1. **KISS** (Keep It Simple, Stupid) - Simplicidade > Complexidade
+2. **DRY** (Don't Repeat Yourself) - Reutilizar código
+3. **YAGNI** (You Aren't Gonna Need It) - Não adicionar features especulativas
+4. **Mobile-First** - Sempre pensar na experiência mobile
+5. **Offline-First** - App funciona sem internet
+6. **Performance** - Cada frame importa
+7. **Type-Safety** - TypeScript em modo strict
+
+## Anti-Patterns a Evitar
+- ❌ Prop drilling excessivo
+- ❌ Componentes gigantes (> 300 linhas)
+- ❌ Lógica de negócio em componentes
+- ❌ Mutação direta de estado
+- ❌ Dependências cíclicas
+- ❌ Magic numbers (usar constantes nomeadas)
+- ❌ Console.logs em produção (usar logger apropriado)
+- ❌ Funções anônimas em renders (causam re-renders)
+
+## Quando em Dúvida
+1. Consultar este arquivo
+2. Verificar código existente similar
+3. Seguir convenções do Expo/React Native
+4. Priorizar legibilidade sobre "clever code"
+5. Perguntar ao time
+

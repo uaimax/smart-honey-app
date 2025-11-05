@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "Smart Honey",
+    "slug": "smart-honey-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFA500"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.webmaxdigital.smarthoney"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFA500"
+      },
+      "package": "com.webmaxdigital.smarthoney",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.VIBRATE"
+      ],
+      "versionCode": 1
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Smart Honey precisa acessar o microfone para gravar suas despesas por áudio."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Smart Honey usa sua localização para identificar estabelecimentos próximos e facilitar o registro de despesas.",
+          "locationWhenInUsePermission": "Smart Honey usa sua localização para identificar estabelecimentos próximos e facilitar o registro de despesas."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#FFA500",
+          "androidMode": "default",
+          "androidCollapsedTitle": "Smart Honey"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "19d3e484-357c-4df8-bf34-95c558d2e502"
+      }
+    }
+  }
+}
