@@ -18,7 +18,7 @@ import {
   saveSoundEnabled,
   UserPreferences
 } from '@/services/preferences';
-import { info, warn, LogCategory } from '@/services/logger';
+import { info, warn, error, LogCategory } from '@/services/logger';
 import * as Notifications from 'expo-notifications';
 import { parseNotification } from '@/utils/notificationParser';
 import { setupBackgroundPersistence, getBackgroundStatus, resetBackgroundSettings } from '@/services/backgroundPersistence';
@@ -154,7 +154,7 @@ export const PreferencesScreen: React.FC<any> = ({ navigation }) => {
                     await submitNewDraft({
                       text: `${parsed.description} - R$ ${parsed.amount.toFixed(2)}`,
                       cardId: defaultCardId || undefined,
-                      destinationIds: [],
+                      selectedDestinations: [],
                     });
 
                     createdDrafts++;
