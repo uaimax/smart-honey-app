@@ -1,20 +1,34 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Card, Draft, User, SubmitDraftParams, UpdateDraftParams, QueuedDraft, LoginCredentials, Destination } from '@/types';
+import {
+  Card,
+  Draft,
+  User,
+  SubmitDraftParams,
+  UpdateDraftParams,
+  QueuedDraft,
+  LoginCredentials,
+  Destination,
+  RegisterCredentials,
+  SummaryByDestination,
+} from '@/types';
 import {
   fetchCards,
   fetchUsers,
   fetchDrafts,
   fetchDestinations,
+  createDestination as apiCreateDestination,
   submitDraft as apiSubmitDraft,
   updateDraft as apiUpdateDraft,
   deleteDraft as apiDeleteDraft,
   apiLogout,
+  getSummaryByDestination,
 } from '@/services/api';
 import { addToQueue, getQueue, removeFromQueue, processQueue, startNetworkMonitoring } from '@/services/queue';
 import { ensureValidDate } from '@/utils/dateUtils';
-import { getUserData, clearToken, clearAllCache, login as authLogin } from '@/services/auth';
+import { getUserData, clearToken, clearAllCache, login as authLogin, register as authRegister } from '@/services/auth';
 import { getDefaultCard, saveDefaultCard } from '@/services/preferences';
 import { requestPermission as requestLocationPermission, getCurrentLocation } from '@/services/location';
+import { info, warn, error, LogCategory } from '@/services/logger';
 
 interface AppContextType {
   // Estado
@@ -28,19 +42,25 @@ interface AppContextType {
   isLoading: boolean;
   error: string | null;
   defaultCardId: string | null;
+  refreshKey: number;
+  summaryData: SummaryByDestination[];
 
   // Ações
   setCurrentUser: (user: User) => void;
   submitNewDraft: (params: SubmitDraftParams) => Promise<void>;
   updateDraft: (draftId: string, data: UpdateDraftParams) => Promise<void>;
   deleteDraft: (draftId: string) => Promise<void>;
+  createDestination: (name: string) => Promise<void>;
   refreshData: () => Promise<void>;
+  forceRefresh: () => void;
   setSelectedMonth: (month: string) => void;
   retryDraft: (draftId: string) => Promise<void>;
   removeDraft: (draftId: string) => Promise<void>;
   login: (credentials: LoginCredentials) => Promise<boolean>;
+  register: (credentials: RegisterCredentials) => Promise<boolean>;
   logout: () => Promise<void>;
   setDefaultCardId: (cardId: string | null) => void;
+  loadSummary: (month?: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -61,6 +81,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [defaultCardId, setDefaultCardId] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0); // Força re-render de componentes
+  const [summaryData, setSummaryData] = useState<SummaryByDestination[]>([]);
 
   // Inicialização
   useEffect(() => {
@@ -91,12 +113,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   /**
    * Inicializa o app carregando dados iniciais
    */
-  const initializeApp = async () => {
+  const initializeApp = async (isFirstLogin = false, manageLoading = true) => {
     try {
-      setIsLoading(true);
+      if (manageLoading) {
+        setIsLoading(true);
+      }
       setError(null);
 
-      console.log('🚀 Inicializando Smart Honey...');
+      info(LogCategory.APP, 'Inicializando Smart Honey...', { isFirstLogin });
 
       // Carregar dados do usuário do AsyncStorage
       const userData = await getUserData();
@@ -109,6 +133,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           tenantName: userData.tenantName,
           role: userData.role,
         });
+        info(LogCategory.APP, 'Dados do usuário carregados', { userId: userData.id, tenantId: userData.tenantId });
+      } else {
+        warn(LogCategory.APP, 'Nenhum dados de usuário encontrados no AsyncStorage');
       }
 
       // Carregar dados em paralelo (não bloquear app se falhar)
@@ -119,31 +146,82 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       // Pedir permissão de localização (não bloquear se negada)
       try {
         await requestLocationPermission();
-      } catch (error) {
-        console.warn('⚠️ Permissão de localização não concedida');
+      } catch (err) {
+        warn(LogCategory.PERMISSIONS, 'Permissão de localização não concedida', err);
       }
 
-      // Carregar dados
-      try {
-        [cardsData, usersData, draftsData] = await Promise.all([
-          fetchCards().catch(() => []),
-          fetchUsers().catch(() => []),
-          fetchDrafts(selectedMonth).catch(() => []),
-        ]);
+      // Carregar dados da API com retry para primeiro login
+      let attempts = isFirstLogin ? 3 : 1;
+      let success = false;
 
-        setCards(cardsData || []);
-        setUsers(usersData || []);
-        setDrafts(draftsData || []);
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          info(LogCategory.API, 'Carregando dados da API', { attempt, maxAttempts: attempts });
 
-        // Carregar destinations
-        const destinationsData = await fetchDestinations().catch(() => []);
-        setDestinations(destinationsData || []);
-      } catch (err) {
-        console.warn('⚠️ Alguns dados não puderam ser carregados');
-        setCards([]);
-        setUsers([]);
-        setDrafts([]);
-        setDestinations([]);
+          const [cardsResponse, usersResponse, draftsResponse, destinationsResponse] = await Promise.allSettled([
+            fetchCards(),
+            fetchUsers(),
+            fetchDrafts(selectedMonth),
+            fetchDestinations(),
+          ]);
+
+          // Processar resultados
+          cardsData = cardsResponse.status === 'fulfilled' ? cardsResponse.value : [];
+          usersData = usersResponse.status === 'fulfilled' ? usersResponse.value : [];
+          draftsData = draftsResponse.status === 'fulfilled' ? draftsResponse.value : [];
+          const destinationsData = destinationsResponse.status === 'fulfilled' ? destinationsResponse.value : [];
+
+          // Log dos resultados
+          info(LogCategory.API, 'Dados carregados da API', {
+            cards: cardsData.length,
+            users: usersData.length,
+            drafts: draftsData.length,
+            destinations: destinationsData.length,
+            attempt,
+          });
+
+          // Verificar se pelo menos cartões e usuários foram carregados
+          if (cardsData.length > 0 && usersData.length > 0) {
+            setCards(cardsData);
+            setUsers(usersData);
+            // Preservar timestamps originais da API
+            setDrafts(draftsData.map(draft => ({
+              ...draft,
+              timestamp: new Date(draft.timestamp) // Usar timestamp original da API
+            })));
+            setDestinations(destinationsData);
+            info(LogCategory.APP, 'Estados atualizados no contexto', {
+              cards: cardsData.length,
+              users: usersData.length,
+              drafts: draftsData.length,
+              destinations: destinationsData.length,
+            });
+            success = true;
+            break;
+          } else if (attempt < attempts) {
+            warn(LogCategory.API, 'Dados incompletos - tentando novamente', {
+              attempt,
+              cardsCount: cardsData.length,
+              usersCount: usersData.length,
+            });
+            // Aguardar antes de tentar novamente
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (err) {
+          error(LogCategory.API, 'Erro ao carregar dados da API', { attempt, error: err });
+          if (attempt === attempts) {
+            // Última tentativa falhou - usar dados vazios
+            warn(LogCategory.API, 'Falha final no carregamento - usando dados vazios');
+            setCards([]);
+            setUsers([]);
+            setDrafts([]);
+            setDestinations([]);
+          }
+        }
+      }
+
+      if (!success && isFirstLogin) {
+        warn(LogCategory.APP, 'Primeiro login com dados incompletos - pode ser necessário pull-to-refresh');
       }
 
       // Carregar/definir cartão padrão
@@ -153,7 +231,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       if (!savedDefaultCard && cardsData.length === 1) {
         const onlyCard = cardsData[0];
         if (!onlyCard.id.startsWith('mock-')) {
-          console.log('🎯 Apenas 1 cartão encontrado - selecionando automaticamente:', onlyCard.name);
+          info(LogCategory.APP, 'Apenas 1 cartão encontrado - selecionando automaticamente', { cardName: onlyCard.name });
           savedDefaultCard = onlyCard.id;
           await saveDefaultCard(savedDefaultCard);
         }
@@ -161,13 +239,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
       setDefaultCardId(savedDefaultCard);
 
-      console.log('✅ App inicializado com sucesso');
+      info(LogCategory.APP, 'App inicializado com sucesso', {
+        cardsLoaded: cardsData.length,
+        usersLoaded: usersData.length,
+        hasDefaultCard: !!savedDefaultCard,
+        isFirstLogin,
+      });
     } catch (err) {
-      console.error('❌ Erro ao inicializar app:', err);
+      error(LogCategory.APP, 'Erro ao inicializar app', err);
       // Não bloquear app se dados não carregarem
       setError(null);
     } finally {
-      setIsLoading(false);
+      if (manageLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -179,10 +264,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       setIsLoading(true);
       const draftsData = await fetchDrafts(month);
 
-      // Garantir que todas as datas são válidas
+      // Preservar timestamps originais da API (não sobrescrever)
       const draftsWithValidDates = draftsData.map(draft => ({
         ...draft,
-        timestamp: ensureValidDate(draft.timestamp),
+        timestamp: new Date(draft.timestamp), // Usar timestamp original da API
       }));
 
       setDrafts(draftsWithValidDates);
@@ -346,10 +431,19 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
    * Recarrega todos os dados
    */
   const refreshData = async () => {
+    info(LogCategory.APP, 'Usuário solicitou refresh manual dos dados');
     await Promise.all([
-      initializeApp(),
+      initializeApp(false), // Não é primeiro login, mas força reload
       loadQueue(),
     ]);
+  };
+
+  /**
+   * Força re-render completo de todos os componentes
+   */
+  const forceRefresh = () => {
+    info(LogCategory.APP, 'Forçando refresh completo da UI');
+    setRefreshKey(prev => prev + 1);
   };
 
   /**
@@ -357,17 +451,121 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
    */
   const login = async (credentials: LoginCredentials): Promise<boolean> => {
     try {
+      info(LogCategory.AUTH, 'Iniciando processo de login', { email: credentials.email });
+
       const response = await authLogin(credentials);
       if (response.success && response.data) {
-        console.log('🔄 Recarregando dados após login...');
-        // Recarregar dados do app após login
-        await initializeApp();
-        console.log('✅ Dados recarregados');
+        info(LogCategory.AUTH, 'Login bem-sucedido - forçando reload completo...');
+
+        // Forçar estado de loading antes de recarregar
+        setIsLoading(true);
+
+        try {
+          // Resetar estados para forçar re-render
+          setCards([]);
+          setUsers([]);
+          setDrafts([]);
+          setDestinations([]);
+
+          // Recarregar dados do usuário primeiro
+          const userData = await getUserData();
+          if (userData) {
+            setCurrentUser({
+              id: userData.id,
+              name: userData.name,
+              email: userData.email,
+              tenantId: userData.tenantId,
+              tenantName: userData.tenantName,
+              role: userData.role,
+            });
+          }
+
+          // Forçar reload completo dos dados com retry
+          await Promise.all([
+            initializeApp(true, false), // Primeiro login com retry, sem gerenciar loading
+            loadQueue(),
+          ]);
+
+          info(LogCategory.AUTH, 'Dados recarregados após login com sucesso');
+
+          // Aguardar um tick para garantir que React processou as atualizações de estado
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Forçar re-render completo
+          forceRefresh();
+        } finally {
+          setIsLoading(false);
+        }
+
         return true;
+      } else {
+        warn(LogCategory.AUTH, 'Login falhou', { error: response.error });
       }
       return false;
-    } catch (error) {
-      console.error('❌ Erro no login:', error);
+    } catch (err) {
+      error(LogCategory.AUTH, 'Erro durante processo de login', err);
+      return false;
+    }
+  };
+
+  /**
+   * Register new user with new tenant
+   */
+  const register = async (credentials: RegisterCredentials): Promise<boolean> => {
+    try {
+      info(LogCategory.AUTH, 'Starting registration process', { email: credentials.email });
+
+      const response = await authRegister(credentials);
+      if (response.success && response.data) {
+        info(LogCategory.AUTH, 'Registration successful - forcing complete reload...');
+
+        // Force loading state before reloading
+        setIsLoading(true);
+
+        try {
+          // Reset states to force re-render
+          setCards([]);
+          setUsers([]);
+          setDrafts([]);
+          setDestinations([]);
+
+          // Reload user data first
+          const userData = await getUserData();
+          if (userData) {
+            setCurrentUser({
+              id: userData.id,
+              name: userData.name,
+              email: userData.email,
+              tenantId: userData.tenantId,
+              tenantName: userData.tenantName,
+              role: userData.role,
+            });
+          }
+
+          // Force complete data reload with retry
+          await Promise.all([
+            initializeApp(true, false), // First login with retry, without managing loading
+            loadQueue(),
+          ]);
+
+          info(LogCategory.AUTH, 'Data reloaded after registration successfully');
+
+          // Wait a tick to ensure React processed state updates
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Force complete re-render
+          forceRefresh();
+        } finally {
+          setIsLoading(false);
+        }
+
+        return true;
+      } else {
+        warn(LogCategory.AUTH, 'Registration failed', { error: response.error });
+      }
+      return false;
+    } catch (err) {
+      error(LogCategory.AUTH, 'Error during registration process', err);
       return false;
     }
   };
@@ -410,7 +608,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         setDrafts(prev =>
           prev.map(d =>
             d.id === draftId
-              ? { ...d, ...data, timestamp: ensureValidDate(d.timestamp) }
+              ? { ...d, ...data } // Não sobrescrever timestamp
               : d
           )
         );
@@ -441,6 +639,25 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   };
 
   /**
+   * Cria um novo destination (responsável)
+   */
+  const createDestination = async (name: string) => {
+    try {
+      info(LogCategory.API, 'Criando novo destination', { name });
+
+      const newDestination = await apiCreateDestination(name);
+
+      // Adicionar à lista local
+      setDestinations(prev => [...prev, newDestination]);
+
+      info(LogCategory.API, 'Destination criado e adicionado à lista', { id: newDestination.id, name: newDestination.name });
+    } catch (err) {
+      error(LogCategory.API, 'Erro ao criar destination', err);
+      throw err;
+    }
+  };
+
+  /**
    * Tenta reenviar um draft da fila
    */
   const retryDraft = async (draftId: string) => {
@@ -467,6 +684,21 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }
   };
 
+  /**
+   * Load summary by destination
+   */
+  const loadSummary = async (month?: string) => {
+    try {
+      info(LogCategory.API, 'Loading summary by destination', { month });
+      const summary = await getSummaryByDestination(month);
+      setSummaryData(summary);
+      info(LogCategory.API, 'Summary loaded successfully', { count: summary.length });
+    } catch (err) {
+      error(LogCategory.API, 'Error loading summary', err);
+      setSummaryData([]);
+    }
+  };
+
   const value: AppContextType = {
     currentUser,
     cards,
@@ -478,17 +710,23 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     isLoading,
     error,
     defaultCardId,
+    refreshKey,
+    summaryData,
     setCurrentUser,
     submitNewDraft,
     updateDraft,
     deleteDraft,
+    createDestination,
     refreshData,
+    forceRefresh,
     setSelectedMonth,
     retryDraft,
     removeDraft,
     login,
+    register,
     logout,
     setDefaultCardId,
+    loadSummary,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

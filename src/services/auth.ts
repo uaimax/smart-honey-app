@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { apiRegister } from './api';
+import type { RegisterCredentials } from '@/types';
 
 const API_BASE_URL = 'https://smart.app.webmaxdigital.com';
 const AUTH_TOKEN_KEY = '@smart_honey:auth_token';
@@ -90,6 +92,44 @@ class AuthService {
       return {
         success: false,
         error: 'Erro ao conectar com o servidor',
+      };
+    }
+  }
+
+  /**
+   * Register new user with new tenant
+   */
+  async register(credentials: RegisterCredentials): Promise<AuthResponse> {
+    try {
+      console.log('🔐 Registering new user...');
+
+      const response = await apiRegister(credentials);
+
+      if (response.success && response.data) {
+        // Salvar token e dados do usuário
+        await this.saveToken(response.data.token, credentials.rememberMe);
+
+        const userData: UserData = {
+          id: response.data.user.id,
+          name: response.data.user.name,
+          email: response.data.user.email,
+          tenantId: response.data.tenant.id,
+          tenantName: response.data.tenant.name,
+          role: response.data.role,
+        };
+
+        await this.saveUserData(userData);
+
+        console.log('✅ Registration successful');
+      }
+
+      return response;
+    } catch (error: any) {
+      console.error('❌ Erro ao registrar:', error);
+
+      return {
+        success: false,
+        error: 'Erro ao criar conta',
       };
     }
   }
@@ -239,6 +279,7 @@ export const authService = new AuthService();
 
 // Exportar funções principais
 export const login = (credentials: LoginCredentials) => authService.login(credentials);
+export const register = (credentials: RegisterCredentials) => authService.register(credentials);
 export const saveToken = (token: string, rememberMe: boolean) => authService.saveToken(token, rememberMe);
 export const getToken = () => authService.getToken();
 export const getUserData = () => authService.getUserData();

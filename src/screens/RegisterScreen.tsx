@@ -13,24 +13,63 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@/theme';
-import { login } from '@/services/auth';
+import { useApp } from '@/context/AppContext';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/types';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Register'>;
 
-export const LoginScreen: React.FC<Props> = ({ navigation }) => {
+export const RegisterScreen: React.FC<Props> = ({ navigation }) => {
   const theme = useTheme();
+  const { register } = useApp();
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [tenantName, setTenantName] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleLogin = async () => {
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const handleRegister = async () => {
     // Validação básica
-    if (!email.trim() || !password.trim()) {
-      setError('Por favor, preencha todos os campos');
+    if (!name.trim()) {
+      setError('Por favor, informe seu nome completo');
+      return;
+    }
+
+    if (!email.trim()) {
+      setError('Por favor, informe seu email');
+      return;
+    }
+
+    if (!validateEmail(email.trim())) {
+      setError('Por favor, informe um email válido');
+      return;
+    }
+
+    if (!password.trim()) {
+      setError('Por favor, informe uma senha');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('A senha deve ter no mínimo 6 caracteres');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError('As senhas não coincidem');
+      return;
+    }
+
+    if (!tenantName.trim()) {
+      setError('Por favor, informe o nome do grupo');
       return;
     }
 
@@ -38,23 +77,23 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
     setError('');
 
     try {
-      const response = await login({
+      const success = await register({
+        name: name.trim(),
         email: email.trim(),
         password: password.trim(),
+        tenantName: tenantName.trim(),
         rememberMe,
       });
 
-      if (response.success) {
-        console.log('✅ Login bem-sucedido - carregando dados...');
-        // Manter loading ativo até que o AppNavigator detecte e recarregue os dados
-        // O loading só será removido quando o AppNavigator atualizar isAuth para true
-        // Não definir setIsLoading(false) aqui para manter o loading
+      if (success) {
+        console.log('✅ Registro bem-sucedido - carregando dados...');
+        // Loading permanece ativo até que o AppNavigator detecte e recarregue
       } else {
-        setError(response.error || 'Email ou senha inválidos');
+        setError('Erro ao criar conta. Verifique os dados e tente novamente.');
         setIsLoading(false);
       }
     } catch (err: any) {
-      console.error('Erro ao fazer login:', err);
+      console.error('Erro ao criar conta:', err);
       setError('Erro ao conectar com o servidor');
       setIsLoading(false);
     }
@@ -77,15 +116,39 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
           <View style={styles.header}>
             <Text style={styles.logo}>🍯</Text>
             <Text style={[styles.title, { color: theme.colors.text }]}>
-              Smart Honey
+              Criar Conta
             </Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-              Controle de despesas simplificado
+              Crie seu grupo e comece a controlar suas despesas
             </Text>
           </View>
 
           {/* Formulário */}
           <View style={styles.form}>
+            {/* Nome completo */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.colors.text }]}>
+                Nome completo
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor: theme.colors.border,
+                    color: theme.colors.text,
+                  },
+                ]}
+                placeholder="João Silva"
+                placeholderTextColor={theme.colors.textTertiary}
+                value={name}
+                onChangeText={setName}
+                autoCapitalize="words"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+            </View>
+
             {/* Email */}
             <View style={styles.inputGroup}>
               <Text style={[styles.label, { color: theme.colors.text }]}>
@@ -136,6 +199,55 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
               />
             </View>
 
+            {/* Confirmar senha */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.colors.text }]}>
+                Confirmar senha
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor: theme.colors.border,
+                    color: theme.colors.text,
+                  },
+                ]}
+                placeholder="••••••••"
+                placeholderTextColor={theme.colors.textTertiary}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+            </View>
+
+            {/* Nome do grupo */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: theme.colors.text }]}>
+                Nome do grupo
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: theme.colors.surface,
+                    borderColor: theme.colors.border,
+                    color: theme.colors.text,
+                  },
+                ]}
+                placeholder="Ex: Família Silva, Amigos, Apartamento"
+                placeholderTextColor={theme.colors.textTertiary}
+                value={tenantName}
+                onChangeText={setTenantName}
+                autoCapitalize="words"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+            </View>
+
             {/* Lembrar-me */}
             <View style={styles.rememberMeContainer}>
               <Switch
@@ -167,17 +279,17 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
               </View>
             ) : null}
 
-            {/* Botão de Login */}
+            {/* Botão de Criar Conta */}
             <Pressable
               style={[
-                styles.loginButton,
+                styles.registerButton,
                 {
                   backgroundColor: isLoading
                     ? theme.colors.border
                     : theme.colors.primary,
                 },
               ]}
-              onPress={handleLogin}
+              onPress={handleRegister}
               disabled={isLoading}
             >
               {isLoading ? (
@@ -185,33 +297,24 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
               ) : (
                 <Text
                   style={[
-                    styles.loginButtonText,
+                    styles.registerButtonText,
                     { color: theme.colors.textOnPrimary },
                   ]}
                 >
-                  Entrar
+                  Criar Conta
                 </Text>
               )}
             </Pressable>
           </View>
 
-          {/* Link para esqueci senha */}
-          <View style={styles.forgotPasswordContainer}>
-            <Pressable onPress={() => navigation.navigate('ForgotPassword')} disabled={isLoading}>
-              <Text style={[styles.linkText, { color: theme.colors.primary }]}>
-                Esqueci minha senha
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Link para criar conta */}
+          {/* Link para Login */}
           <View style={styles.footer}>
             <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-              Não tem uma conta?{' '}
+              Já tem uma conta?{' '}
             </Text>
-            <Pressable onPress={() => navigation.navigate('Register')} disabled={isLoading}>
+            <Pressable onPress={() => navigation.navigate('Login')} disabled={isLoading}>
               <Text style={[styles.linkText, { color: theme.colors.primary }]}>
-                Criar conta
+                Entrar
               </Text>
             </Pressable>
           </View>
@@ -235,19 +338,19 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: 32,
   },
   logo: {
-    fontSize: 80,
-    marginBottom: 16,
+    fontSize: 60,
+    marginBottom: 12,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '700',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     textAlign: 'center',
   },
   form: {
@@ -256,7 +359,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   inputGroup: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   label: {
     fontSize: 14,
@@ -273,7 +376,7 @@ const styles = StyleSheet.create({
   rememberMeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   rememberMeText: {
     fontSize: 14,
@@ -288,7 +391,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-  loginButton: {
+  registerButton: {
     height: 50,
     borderRadius: 8,
     alignItems: 'center',
@@ -299,13 +402,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
-  loginButtonText: {
+  registerButtonText: {
     fontSize: 16,
     fontWeight: '600',
-  },
-  forgotPasswordContainer: {
-    marginTop: 16,
-    alignItems: 'center',
   },
   footer: {
     marginTop: 24,

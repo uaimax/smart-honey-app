@@ -1,4 +1,5 @@
 import { ParsedNotification } from '@/types';
+import { debug, info, warn, LogCategory } from '@/services/logger';
 
 /**
  * Lista de apps bancários conhecidos
@@ -17,13 +18,23 @@ const BANKING_APPS = [
  * Verifica se a notificação é de um app bancário
  */
 export const isBankingNotification = (packageName: string): boolean => {
-  return BANKING_APPS.some(app => packageName.includes(app));
+  const isBanking = BANKING_APPS.some(app => packageName.includes(app));
+
+  if (isBanking) {
+    debug(LogCategory.WALLET, 'App bancário identificado', { packageName });
+  } else {
+    debug(LogCategory.WALLET, 'App não bancário ou desconhecido', { packageName });
+  }
+
+  return isBanking;
 };
 
 /**
  * Extrai valor monetário do texto da notificação
  */
 const extractAmount = (text: string): number | null => {
+  debug(LogCategory.WALLET, 'Tentando extrair valor monetário', { text });
+
   // Padrões comuns em notificações bancárias
   const patterns = [
     /R\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})/i, // R$ 1.234,56
@@ -32,18 +43,25 @@ const extractAmount = (text: string): number | null => {
     /(\d{1,3}(?:\.\d{3})*,\d{2})/,          // 1.234,56
   ];
 
-  for (const pattern of patterns) {
+  for (let i = 0; i < patterns.length; i++) {
+    const pattern = patterns[i];
     const match = text.match(pattern);
     if (match) {
       // Remover pontos de milhar e converter vírgula para ponto
       const valueStr = match[1].replace(/\./g, '').replace(',', '.');
       const value = parseFloat(valueStr);
       if (!isNaN(value) && value > 0) {
+        info(LogCategory.WALLET, 'Valor monetário extraído com sucesso', {
+          rawMatch: match[0],
+          extractedValue: value,
+          patternIndex: i,
+        });
         return value;
       }
     }
   }
 
+  warn(LogCategory.WALLET, 'Não foi possível extrair valor monetário válido do texto');
   return null;
 };
 
@@ -114,36 +132,44 @@ export const parseNotification = (
   body: string,
   packageName: string
 ): ParsedNotification | null => {
+  info(LogCategory.WALLET, 'Iniciando parse de notificação', {
+    title,
+    body,
+    packageName,
+  });
+
   // Verificar se é de um app bancário
   if (!isBankingNotification(packageName)) {
+    debug(LogCategory.WALLET, 'Notificação rejeitada - não é de app bancário');
     return null;
   }
 
   const fullText = `${title} ${body}`;
+  debug(LogCategory.WALLET, 'Texto completo para análise', { fullText });
 
   // Extrair informações
   const amount = extractAmount(fullText);
   if (!amount) {
-    console.log('⚠️ Não foi possível extrair valor da notificação');
+    warn(LogCategory.WALLET, 'Parse rejeitado - não foi possível extrair valor monetário válido');
     return null;
   }
 
   const description = extractEstablishment(fullText);
   const cardLast4 = extractCardLast4(fullText);
 
-  console.log('🔔 Notificação bancária parseada:', {
-    amount,
-    description,
-    cardLast4,
-    source: packageName,
-  });
-
-  return {
+  const result = {
     description,
     amount,
     timestamp: new Date(),
     cardLast4,
   };
+
+  info(LogCategory.WALLET, 'Notificação bancária parseada com sucesso!', {
+    ...result,
+    source: packageName,
+  });
+
+  return result;
 };
 
 /**

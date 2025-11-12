@@ -1,5 +1,19 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { ApiResponse, Card, Draft, SubmitDraftParams, UpdateDraftParams, User, Destination } from '@/types';
+import {
+  ApiResponse,
+  Card,
+  Draft,
+  SubmitDraftParams,
+  UpdateDraftParams,
+  User,
+  Destination,
+  RegisterCredentials,
+  AuthResponse,
+  ResetPasswordParams,
+  InviteData,
+  AcceptInviteParams,
+  SummaryByDestination,
+} from '@/types';
 import { getToken, clearToken } from './auth';
 
 // Configuração base da API
@@ -27,15 +41,6 @@ class ApiService {
         const token = await getToken();
         if (token && config.headers) {
           config.headers.Authorization = `Bearer ${token}`;
-
-          // Log detalhado para debug
-          if (config.url?.includes('destinations')) {
-            console.log('🔍 DEBUG destinations request:');
-            console.log('  - URL:', config.url);
-            console.log('  - Token existe:', !!token);
-            console.log('  - Token COMPLETO:', token);
-            console.log('  - Header Authorization COMPLETO:', config.headers.Authorization);
-          }
         }
 
         console.log('📤 API Request:', config.method?.toUpperCase(), config.url);
@@ -355,6 +360,140 @@ class ApiService {
   }
 
   /**
+   * Register new user with new tenant
+   */
+  async register(credentials: RegisterCredentials): Promise<AuthResponse> {
+    try {
+      console.log('📝 Registering new user...');
+
+      const response = await this.client.post<AuthResponse>(
+        '/api/auth/register',
+        {
+          name: credentials.name,
+          email: credentials.email,
+          password: credentials.password,
+          tenantName: credentials.tenantName,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      console.log('✅ Registration successful');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Registration error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        error: 'Erro ao conectar com o servidor',
+      };
+    }
+  }
+
+  /**
+   * Request password reset
+   */
+  async forgotPassword(email: string): Promise<ApiResponse> {
+    try {
+      console.log('🔑 Requesting password reset for:', email);
+
+      const response = await this.client.post<ApiResponse>(
+        '/api/auth/forgot-password',
+        { email },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      console.log('✅ Password reset email sent');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Forgot password error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        message: 'Erro ao conectar com o servidor',
+      };
+    }
+  }
+
+  /**
+   * Verify reset token validity
+   */
+  async verifyResetToken(token: string): Promise<ApiResponse> {
+    try {
+      console.log('🔍 Verifying reset token...');
+
+      const response = await this.client.get<ApiResponse>(
+        `/api/auth/verify-reset-token/${token}`
+      );
+
+      console.log('✅ Token verified');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Token verification error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        message: 'Token inválido ou expirado',
+      };
+    }
+  }
+
+  /**
+   * Reset password with token
+   */
+  async resetPassword(params: ResetPasswordParams): Promise<ApiResponse> {
+    try {
+      console.log('🔒 Resetting password...');
+
+      const response = await this.client.post<ApiResponse>(
+        '/api/auth/reset-password',
+        {
+          token: params.token,
+          newPassword: params.newPassword,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      console.log('✅ Password reset successful');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Password reset error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        message: 'Erro ao redefinir senha',
+      };
+    }
+  }
+
+  /**
    * Logout do servidor (limpa cookie)
    */
   async logout(): Promise<void> {
@@ -365,6 +504,170 @@ class ApiService {
     } catch (error) {
       console.warn('⚠️ Erro ao fazer logout no servidor (continuando):', error);
       // Não bloquear logout se servidor falhar
+    }
+  }
+
+  /**
+   * Get invites list (admin only)
+   */
+  async getInvites(): Promise<InviteData[]> {
+    try {
+      console.log('📨 Fetching invites...');
+
+      const response = await this.client.get<{ success: boolean; data: InviteData[] }>(
+        '/api/invites'
+      );
+
+      if (response.data.success && response.data.data) {
+        console.log('✅ Invites loaded:', response.data.data.length);
+        return response.data.data;
+      }
+
+      return [];
+    } catch (error: any) {
+      console.error('❌ Error fetching invites:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Create invite (admin only)
+   */
+  async createInvite(email: string, role: string): Promise<InviteData> {
+    try {
+      console.log('✉️ Creating invite for:', email);
+
+      const response = await this.client.post<{ success: boolean; data: InviteData }>(
+        '/api/invites',
+        { email, role },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (response.data.success && response.data.data) {
+        console.log('✅ Invite created:', response.data.data);
+        return response.data.data;
+      }
+
+      throw new Error('Failed to create invite');
+    } catch (error: any) {
+      console.error('❌ Error creating invite:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete invite (admin only)
+   */
+  async deleteInvite(inviteId: string): Promise<ApiResponse> {
+    try {
+      console.log('🗑️ Deleting invite:', inviteId);
+
+      const response = await this.client.delete<ApiResponse>(
+        `/api/invites/${inviteId}`
+      );
+
+      console.log('✅ Invite deleted');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Error deleting invite:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        message: 'Erro ao deletar convite',
+      };
+    }
+  }
+
+  /**
+   * Verify invite token (public)
+   */
+  async verifyInviteToken(token: string): Promise<ApiResponse> {
+    try {
+      console.log('🔍 Verifying invite token...');
+
+      const response = await this.client.get<ApiResponse>(
+        `/api/invites/accept/${token}`
+      );
+
+      console.log('✅ Invite token verified');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Invite token verification error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        message: 'Token de convite inválido ou expirado',
+      };
+    }
+  }
+
+  /**
+   * Accept invite and create user (public)
+   */
+  async acceptInvite(params: AcceptInviteParams): Promise<AuthResponse> {
+    try {
+      console.log('✅ Accepting invite...');
+
+      const response = await this.client.post<AuthResponse>(
+        `/api/invites/accept/${params.token}`,
+        {
+          name: params.name,
+          password: params.password,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      console.log('✅ Invite accepted successfully');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Accept invite error:', error);
+
+      if (error.response?.data) {
+        return error.response.data;
+      }
+
+      return {
+        success: false,
+        error: 'Erro ao aceitar convite',
+      };
+    }
+  }
+
+  /**
+   * Cria um novo destination (responsável)
+   */
+  async createDestination(name: string): Promise<Destination> {
+    try {
+      const response = await this.client.post<{ success: boolean; data: Destination }>('/api/external/destinations', {
+        name: name.trim(),
+        type: 'person', // Por padrão, sempre criar como "person"
+      });
+
+      if (response.data.success && response.data.data) {
+        console.log('✅ Destination criado:', response.data.data);
+        return response.data.data;
+      } else {
+        throw new Error('Resposta inválida do servidor');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao criar destination:', error);
+      throw error;
     }
   }
 
@@ -413,6 +716,35 @@ class ApiService {
     }
   }
 
+  /**
+   * Get summary by destination (person)
+   */
+  async getSummaryByDestination(month?: string): Promise<SummaryByDestination[]> {
+    try {
+      console.log('📊 Fetching summary by destination...', { month });
+
+      const params: any = {};
+      if (month) {
+        params.month = month;
+      }
+
+      const response = await this.client.get<{ success: boolean; data: SummaryByDestination[] }>(
+        '/api/entries/summary-by-destination',
+        { params }
+      );
+
+      if (response.data.success && response.data.data) {
+        console.log('✅ Summary loaded:', response.data.data.length, 'destinations');
+        return response.data.data;
+      }
+
+      return [];
+    } catch (error: any) {
+      console.error('❌ Error fetching summary:', error);
+      return [];
+    }
+  }
+
 }
 
 // Exportar instância única (singleton)
@@ -424,8 +756,25 @@ export const fetchCards = () => api.fetchCards();
 export const fetchUsers = () => api.fetchUsers();
 export const fetchDrafts = (month: string) => api.fetchDrafts(month);
 export const fetchDestinations = () => api.fetchDestinations();
+export const createDestination = (name: string) => api.createDestination(name);
 export const updateDraft = (draftId: string, data: UpdateDraftParams) => api.updateDraft(draftId, data);
 export const deleteDraft = (draftId: string) => api.deleteDraft(draftId);
 export const apiLogout = () => api.logout();
 export const setOnTokenExpired = (callback: () => void) => api.setOnTokenExpired(callback);
+
+// Auth methods
+export const apiRegister = (credentials: RegisterCredentials) => api.register(credentials);
+export const apiForgotPassword = (email: string) => api.forgotPassword(email);
+export const apiVerifyResetToken = (token: string) => api.verifyResetToken(token);
+export const apiResetPassword = (params: ResetPasswordParams) => api.resetPassword(params);
+
+// Invite methods
+export const apiGetInvites = () => api.getInvites();
+export const apiCreateInvite = (email: string, role: string) => api.createInvite(email, role);
+export const apiDeleteInvite = (inviteId: string) => api.deleteInvite(inviteId);
+export const apiVerifyInviteToken = (token: string) => api.verifyInviteToken(token);
+export const apiAcceptInvite = (params: AcceptInviteParams) => api.acceptInvite(params);
+
+// Summary methods
+export const getSummaryByDestination = (month?: string) => api.getSummaryByDestination(month);
 

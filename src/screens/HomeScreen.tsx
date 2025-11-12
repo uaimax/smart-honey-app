@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -35,6 +35,7 @@ export const HomeScreen: React.FC = () => {
     submitNewDraft,
     updateDraft,
     deleteDraft,
+    createDestination,
     isLoading,
     refreshData,
     users,
@@ -42,11 +43,14 @@ export const HomeScreen: React.FC = () => {
     cards,
     defaultCardId,
     setDefaultCardId,
+    refreshKey,
+    queuedDrafts,
   } = useApp();
-  const { filteredDrafts, getTotalByUser, refresh } = useDrafts();
+  const { filteredDrafts, refresh } = useDrafts();
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [feedbackType, setFeedbackType] = useState<'success' | 'error' | 'loading'>('loading');
   const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
+
 
   // Mostrar feedback inline
   const showFeedback = (message: string, type: 'success' | 'error' | 'loading') => {
@@ -179,9 +183,33 @@ export const HomeScreen: React.FC = () => {
           </Pressable>
         </View>
 
+        {/* Badge de Fila Pendente */}
+        {queuedDrafts.length > 0 && (
+          <Pressable
+            style={[
+              styles.queueBadge,
+              { backgroundColor: theme.colors.warning + '20', borderColor: theme.colors.warning },
+            ]}
+            onPress={() => navigation.navigate('Queue')}
+          >
+            <Text style={[styles.queueBadgeIcon, { color: theme.colors.warning }]}>
+              ⚠️
+            </Text>
+            <View style={styles.queueBadgeContent}>
+              <Text style={[styles.queueBadgeTitle, { color: theme.colors.text }]}>
+                {queuedDrafts.length} {queuedDrafts.length === 1 ? 'item pendente' : 'itens pendentes'}
+              </Text>
+              <Text style={[styles.queueBadgeSubtitle, { color: theme.colors.textSecondary }]}>
+                Toque para sincronizar
+              </Text>
+            </View>
+          </Pressable>
+        )}
+
         {/* Seletor de Cartão Padrão */}
         {cards.length > 0 && (
           <CardSelector
+            key={`cards-${refreshKey}`}
             cards={cards}
             selectedCardId={defaultCardId}
             onSelect={handleSelectDefaultCard}
@@ -216,9 +244,12 @@ export const HomeScreen: React.FC = () => {
 
         {/* Seletor de Responsáveis (Destinations) */}
         <DestinationSelector
+          key={`destinations-${refreshKey}`}
           destinations={destinations}
           selectedDestinationIds={selectedDestinations}
           onToggle={handleToggleDestination}
+          onAddDestination={createDestination}
+          isLoading={isLoading}
         />
 
         {/* Feedback Inline */}
@@ -270,35 +301,6 @@ export const HomeScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Rodapé com Totais */}
-        {users && users.length > 0 && (
-        <View style={styles.footer}>
-          <Text style={[styles.footerTitle, { color: theme.colors.textSecondary }]}>
-            Total do Mês
-          </Text>
-          <View style={styles.totalsContainer}>
-            {users.map(user => {
-              const total = getTotalByUser(user.id);
-              return (
-                <View
-                  key={user.id}
-                  style={[
-                    styles.totalChip,
-                    { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
-                  ]}
-                >
-                  <Text style={[styles.totalName, { color: theme.colors.textSecondary }]}>
-                    {user.name}
-                  </Text>
-                  <Text style={[styles.totalAmount, { color: theme.colors.text }]}>
-                    R$ {total.toFixed(2)}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        </View>
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -337,6 +339,29 @@ const styles = StyleSheet.create({
   },
   settingsIcon: {
     fontSize: 28,
+  },
+  queueBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  queueBadgeIcon: {
+    fontSize: 24,
+    marginRight: 12,
+  },
+  queueBadgeContent: {
+    flex: 1,
+  },
+  queueBadgeTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  queueBadgeSubtitle: {
+    fontSize: 12,
   },
   divider: {
     flexDirection: 'row',
@@ -377,39 +402,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     lineHeight: 24,
-  },
-  footer: {
-    marginTop: 32,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-  },
-  footerTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  totalsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  totalChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    marginRight: 8,
-    marginBottom: 8,
-  },
-  totalName: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  totalAmount: {
-    fontSize: 16,
-    fontWeight: '700',
   },
   warningBanner: {
     padding: 12,

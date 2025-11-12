@@ -6,6 +6,7 @@ import { AppProvider, useApp } from '@/context/AppContext';
 import { AppNavigator } from '@/navigation/AppNavigator';
 import { useTheme } from '@/theme';
 import { setupNotificationListener, setupBackgroundListener, requestPermission } from '@/services/notifications';
+import { setupBackgroundPersistence } from '@/services/backgroundPersistence';
 import { ParsedNotification } from '@/types';
 
 function AppContent() {
@@ -20,6 +21,13 @@ function AppContent() {
     const setupListeners = async () => {
       // Pedir permissão de notificações
       await requestPermission();
+
+      // Configurar persistência em background (não bloquear se falhar)
+      try {
+        await setupBackgroundPersistence();
+      } catch (error) {
+        console.warn('⚠️ Não foi possível configurar persistência em background:', error);
+      }
 
       // Handler para notificações bancárias
       const handleBankingNotification = async (parsedData: ParsedNotification) => {

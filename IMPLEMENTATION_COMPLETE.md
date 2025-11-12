@@ -502,3 +502,4 @@ npm start -- --clear
 **Bugs:** 0
 **Qualidade:** ⭐⭐⭐⭐⭐
 
+

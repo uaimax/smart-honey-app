@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { info, warn, error, debug, LogCategory } from './logger';
 
 const LOCATION_PERMISSION_KEY = '@smart_honey:location_permission';
 const LAST_LOCATION_KEY = '@smart_honey:last_location';
@@ -19,16 +20,23 @@ class LocationService {
    */
   async requestPermission(): Promise<boolean> {
     try {
+      debug(LogCategory.LOCATION, 'Solicitando permissão de localização...');
+
       const { status } = await Location.requestForegroundPermissionsAsync();
       const granted = status === 'granted';
 
       // Salvar status da permissão
       await AsyncStorage.setItem(LOCATION_PERMISSION_KEY, granted.toString());
 
-      console.log('📍 Permissão de localização:', granted ? 'concedida' : 'negada');
+      if (granted) {
+        info(LogCategory.LOCATION, 'Permissão de localização concedida');
+      } else {
+        warn(LogCategory.LOCATION, 'Permissão de localização negada', { status });
+      }
+
       return granted;
-    } catch (error) {
-      console.error('❌ Erro ao solicitar permissão de localização:', error);
+    } catch (err) {
+      error(LogCategory.LOCATION, 'Erro ao solicitar permissão de localização', err);
       return false;
     }
   }
@@ -39,9 +47,13 @@ class LocationService {
   async hasPermission(): Promise<boolean> {
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
-      return status === 'granted';
-    } catch (error) {
-      console.error('❌ Erro ao verificar permissão:', error);
+      const granted = status === 'granted';
+
+      debug(LogCategory.LOCATION, 'Verificando permissão de localização', { status, granted });
+
+      return granted;
+    } catch (err) {
+      error(LogCategory.LOCATION, 'Erro ao verificar permissão de localização', err);
       return false;
     }
   }
@@ -50,11 +62,15 @@ class LocationService {
    * Obtém localização atual do usuário
    */
   async getCurrentLocation(): Promise<{ latitude: number; longitude: number } | null> {
+    const startTime = Date.now();
+
     try {
+      info(LogCategory.LOCATION, 'Iniciando captura de coordenadas...');
+
       // Verificar se tem permissão
       const hasPermission = await this.hasPermission();
       if (!hasPermission) {
-        console.warn('⚠️ Sem permissão de localização');
+        warn(LogCategory.LOCATION, 'Sem permissão de localização - cancelando captura');
         return null;
       }
 
@@ -62,15 +78,23 @@ class LocationService {
       if (this.cachedLocation) {
         const age = Date.now() - this.cachedLocation.timestamp;
         if (age < LOCATION_CACHE_DURATION) {
-          console.log('📍 Usando localização em cache');
+          info(LogCategory.LOCATION, 'Usando localização em cache', {
+            coordinates: {
+              latitude: this.cachedLocation.latitude,
+              longitude: this.cachedLocation.longitude,
+            },
+            cacheAge: Math.round(age / 1000) + 's',
+          });
           return {
             latitude: this.cachedLocation.latitude,
             longitude: this.cachedLocation.longitude,
           };
+        } else {
+          debug(LogCategory.LOCATION, 'Cache de localização expirado', { ageSeconds: Math.round(age / 1000) });
         }
       }
 
-      console.log('📍 Obtendo localização atual...');
+      info(LogCategory.LOCATION, 'Obtendo nova localização via GPS...');
 
       // Obter localização com timeout de 5 segundos
       const location = await Location.getCurrentPositionAsync({
@@ -79,6 +103,7 @@ class LocationService {
         maximumAge: 60000, // Aceitar localização de até 1 minuto atrás
       });
 
+      const duration = Date.now() - startTime;
       const coordinates = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
@@ -89,25 +114,47 @@ class LocationService {
       this.cachedLocation = coordinates;
       await this.saveLastLocation(coordinates);
 
-      console.log('✅ Localização obtida:', coordinates.latitude, coordinates.longitude);
+      info(LogCategory.LOCATION, 'Coordenadas capturadas com sucesso', {
+        coordinates: {
+          latitude: coordinates.latitude,
+          longitude: coordinates.longitude,
+        },
+        accuracy: location.coords.accuracy,
+        durationMs: duration,
+        source: 'GPS',
+      });
 
       return {
         latitude: coordinates.latitude,
         longitude: coordinates.longitude,
       };
-    } catch (error: any) {
-      console.error('❌ Erro ao obter localização:', error.message);
+    } catch (err: any) {
+      const duration = Date.now() - startTime;
+      error(LogCategory.LOCATION, 'Erro ao obter localização via GPS', {
+        errorMessage: err.message,
+        errorCode: err.code,
+        durationMs: duration,
+      });
 
       // Tentar usar última localização salva
       const lastLocation = await this.getLastLocation();
       if (lastLocation) {
-        console.log('📍 Usando última localização conhecida');
+        const age = Date.now() - lastLocation.timestamp;
+        warn(LogCategory.LOCATION, 'Usando última localização conhecida como fallback', {
+          coordinates: {
+            latitude: lastLocation.latitude,
+            longitude: lastLocation.longitude,
+          },
+          ageHours: Math.round(age / (1000 * 60 * 60)),
+          source: 'Cache Antigo',
+        });
         return {
           latitude: lastLocation.latitude,
           longitude: lastLocation.longitude,
         };
       }
 
+      error(LogCategory.LOCATION, 'Falha total na captura de coordenadas - sem fallback disponível');
       return null;
     }
   }
@@ -118,8 +165,9 @@ class LocationService {
   private async saveLastLocation(location: LocationCoordinates): Promise<void> {
     try {
       await AsyncStorage.setItem(LAST_LOCATION_KEY, JSON.stringify(location));
-    } catch (error) {
-      console.error('❌ Erro ao salvar localização:', error);
+      debug(LogCategory.LOCATION, 'Localização salva no cache local');
+    } catch (err) {
+      error(LogCategory.LOCATION, 'Erro ao salvar localização no cache', err);
     }
   }
 
@@ -130,11 +178,16 @@ class LocationService {
     try {
       const locationString = await AsyncStorage.getItem(LAST_LOCATION_KEY);
       if (locationString) {
-        return JSON.parse(locationString);
+        const location = JSON.parse(locationString);
+        debug(LogCategory.LOCATION, 'Última localização recuperada do cache', {
+          age: Math.round((Date.now() - location.timestamp) / (1000 * 60)) + ' minutos',
+        });
+        return location;
       }
+      debug(LogCategory.LOCATION, 'Nenhuma localização salva encontrada no cache');
       return null;
-    } catch (error) {
-      console.error('❌ Erro ao recuperar localização:', error);
+    } catch (err) {
+      error(LogCategory.LOCATION, 'Erro ao recuperar localização do cache', err);
       return null;
     }
   }
@@ -144,6 +197,7 @@ class LocationService {
    */
   clearCache(): void {
     this.cachedLocation = null;
+    info(LogCategory.LOCATION, 'Cache de localização limpo');
   }
 }
 

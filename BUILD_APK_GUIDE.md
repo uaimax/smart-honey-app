@@ -224,3 +224,4 @@ npm run build:apk
 
 **Tudo pronto para build! Configuração validada.** ✅
 
+

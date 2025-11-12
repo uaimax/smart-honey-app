@@ -192,3 +192,4 @@ Console: "📤 Enviando draft: { cardId: 'uuid', ... }"
 
 **Teste novamente! Erro 404 de cartão deve sumir.** 🎯
 
+

@@ -9,9 +9,14 @@ import { setOnTokenExpired } from '@/services/api';
 
 // Screens
 import { LoginScreen } from '@/screens/LoginScreen';
+import { RegisterScreen } from '@/screens/RegisterScreen';
+import { ForgotPasswordScreen } from '@/screens/ForgotPasswordScreen';
+import { ResetPasswordScreen } from '@/screens/ResetPasswordScreen';
+import { AcceptInviteScreen } from '@/screens/AcceptInviteScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { HistoryScreen } from '@/screens/HistoryScreen';
 import { QueueScreen } from '@/screens/QueueScreen';
+import { SummaryScreen } from '@/screens/SummaryScreen';
 import { PreferencesScreen } from '@/screens/PreferencesScreen';
 import { EditDraftScreen } from '@/screens/EditDraftScreen';
 
@@ -26,7 +31,7 @@ const getTabIcon = (routeName: string, focused: boolean) => {
   const icons = {
     Home: focused ? '🏠' : '🏡',
     History: focused ? '📊' : '📈',
-    Queue: focused ? '⏳' : '⏱️',
+    Summary: focused ? '💰' : '💵',
   };
   return icons[routeName as keyof typeof icons] || '📱';
 };
@@ -71,12 +76,11 @@ const MainTabs = () => {
         }}
       />
       <Tab.Screen
-        name="Queue"
-        component={QueueScreen}
+        name="Summary"
+        component={SummaryScreen}
         options={{
-          tabBarLabel: 'Fila',
+          tabBarLabel: 'Resumo',
           headerShown: false,
-          // Badge será implementado quando integrarmos contador
         }}
       />
     </Tab.Navigator>
@@ -93,8 +97,8 @@ export const AppNavigator = () => {
   useEffect(() => {
     checkAuth();
 
-    // Verificar auth a cada 2 segundos (detectar login/logout)
-    const interval = setInterval(checkAuth, 2000);
+    // Verificar auth a cada 1 segundo (detectar login/logout mais rapidamente)
+    const interval = setInterval(checkAuth, 1000);
 
     return () => clearInterval(interval);
   }, []);
@@ -144,8 +148,28 @@ export const AppNavigator = () => {
     );
   }
 
+  const linking = {
+    prefixes: ['smarthoney://', 'https://smart.app.webmaxdigital.com'],
+    config: {
+      screens: {
+        AcceptInvite: 'accept-invite/:token',
+        ResetPassword: 'reset-password/:token',
+        Login: 'login',
+        Register: 'register',
+        ForgotPassword: 'forgot-password',
+        MainTabs: {
+          screens: {
+            Home: 'home',
+            History: 'history',
+            Summary: 'summary',
+          },
+        },
+      },
+    },
+  };
+
   return (
-    <NavigationContainer onReady={() => setNavigationReady(true)}>
+    <NavigationContainer linking={linking} onReady={() => setNavigationReady(true)}>
       <Stack.Navigator
         screenOptions={{
           headerStyle: {
@@ -179,14 +203,44 @@ export const AppNavigator = () => {
                 title: 'Preferências',
               }}
             />
+            <Stack.Screen
+              name="Queue"
+              component={QueueScreen}
+              options={{
+                title: 'Fila de Sincronização',
+                headerBackTitle: 'Voltar',
+              }}
+            />
           </>
         ) : (
-          // Usuário não autenticado - mostrar login
-          <Stack.Screen
-            name="Login"
-            component={LoginScreen}
-            options={{ headerShown: false }}
-          />
+          // Usuário não autenticado - mostrar login e telas públicas
+          <>
+            <Stack.Screen
+              name="Login"
+              component={LoginScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Register"
+              component={RegisterScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="ForgotPassword"
+              component={ForgotPasswordScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="ResetPassword"
+              component={ResetPasswordScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="AcceptInvite"
+              component={AcceptInviteScreen}
+              options={{ headerShown: false }}
+            />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

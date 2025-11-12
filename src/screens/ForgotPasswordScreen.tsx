@@ -9,28 +9,37 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Switch,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '@/theme';
-import { login } from '@/services/auth';
+import { apiForgotPassword } from '@/services/api';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/types';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'ForgotPassword'>;
 
-export const LoginScreen: React.FC<Props> = ({ navigation }) => {
+export const ForgotPasswordScreen: React.FC<Props> = ({ navigation }) => {
   const theme = useTheme();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
 
-  const handleLogin = async () => {
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const handleForgotPassword = async () => {
     // Validação básica
-    if (!email.trim() || !password.trim()) {
-      setError('Por favor, preencha todos os campos');
+    if (!email.trim()) {
+      setError('Por favor, informe seu email');
+      return;
+    }
+
+    if (!validateEmail(email.trim())) {
+      setError('Por favor, informe um email válido');
       return;
     }
 
@@ -38,24 +47,38 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
     setError('');
 
     try {
-      const response = await login({
-        email: email.trim(),
-        password: password.trim(),
-        rememberMe,
-      });
+      const response = await apiForgotPassword(email.trim());
 
       if (response.success) {
-        console.log('✅ Login bem-sucedido - carregando dados...');
-        // Manter loading ativo até que o AppNavigator detecte e recarregue os dados
-        // O loading só será removido quando o AppNavigator atualizar isAuth para true
-        // Não definir setIsLoading(false) aqui para manter o loading
+        setSuccess(true);
+        Alert.alert(
+          'Email Enviado',
+          'Se o email informado estiver cadastrado, você receberá um link para redefinir sua senha.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.navigate('Login'),
+            },
+          ]
+        );
       } else {
-        setError(response.error || 'Email ou senha inválidos');
-        setIsLoading(false);
+        // Por segurança, não revelar se o email existe
+        setSuccess(true);
+        Alert.alert(
+          'Email Enviado',
+          'Se o email informado estiver cadastrado, você receberá um link para redefinir sua senha.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.navigate('Login'),
+            },
+          ]
+        );
       }
     } catch (err: any) {
-      console.error('Erro ao fazer login:', err);
+      console.error('Erro ao solicitar redefinição:', err);
       setError('Erro ao conectar com o servidor');
+    } finally {
       setIsLoading(false);
     }
   };
@@ -75,12 +98,12 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
         >
           {/* Logo/Título */}
           <View style={styles.header}>
-            <Text style={styles.logo}>🍯</Text>
+            <Text style={styles.logo}>🔑</Text>
             <Text style={[styles.title, { color: theme.colors.text }]}>
-              Smart Honey
+              Esqueci minha senha
             </Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-              Controle de despesas simplificado
+              Informe seu email para receber o link de redefinição
             </Text>
           </View>
 
@@ -107,50 +130,8 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
-                editable={!isLoading}
+                editable={!isLoading && !success}
               />
-            </View>
-
-            {/* Senha */}
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Senha
-              </Text>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: theme.colors.surface,
-                    borderColor: theme.colors.border,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="••••••••"
-                placeholderTextColor={theme.colors.textTertiary}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isLoading}
-              />
-            </View>
-
-            {/* Lembrar-me */}
-            <View style={styles.rememberMeContainer}>
-              <Switch
-                value={rememberMe}
-                onValueChange={setRememberMe}
-                trackColor={{
-                  false: theme.colors.border,
-                  true: theme.colors.primary,
-                }}
-                thumbColor="#FFFFFF"
-                disabled={isLoading}
-              />
-              <Text style={[styles.rememberMeText, { color: theme.colors.text }]}>
-                Lembrar-me por 30 dias
-              </Text>
             </View>
 
             {/* Mensagem de erro */}
@@ -167,51 +148,53 @@ export const LoginScreen: React.FC<Props> = ({ navigation }) => {
               </View>
             ) : null}
 
-            {/* Botão de Login */}
+            {/* Mensagem de sucesso */}
+            {success ? (
+              <View
+                style={[
+                  styles.successContainer,
+                  { backgroundColor: theme.colors.success + '20' },
+                ]}
+              >
+                <Text style={[styles.successText, { color: theme.colors.success }]}>
+                  ✓ Verifique seu email para continuar
+                </Text>
+              </View>
+            ) : null}
+
+            {/* Botão de Enviar */}
             <Pressable
               style={[
-                styles.loginButton,
+                styles.submitButton,
                 {
-                  backgroundColor: isLoading
+                  backgroundColor: isLoading || success
                     ? theme.colors.border
                     : theme.colors.primary,
                 },
               ]}
-              onPress={handleLogin}
-              disabled={isLoading}
+              onPress={handleForgotPassword}
+              disabled={isLoading || success}
             >
               {isLoading ? (
                 <ActivityIndicator color={theme.colors.textOnPrimary} />
               ) : (
                 <Text
                   style={[
-                    styles.loginButtonText,
+                    styles.submitButtonText,
                     { color: theme.colors.textOnPrimary },
                   ]}
                 >
-                  Entrar
+                  Enviar link de redefinição
                 </Text>
               )}
             </Pressable>
           </View>
 
-          {/* Link para esqueci senha */}
-          <View style={styles.forgotPasswordContainer}>
-            <Pressable onPress={() => navigation.navigate('ForgotPassword')} disabled={isLoading}>
-              <Text style={[styles.linkText, { color: theme.colors.primary }]}>
-                Esqueci minha senha
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Link para criar conta */}
+          {/* Link para Login */}
           <View style={styles.footer}>
-            <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-              Não tem uma conta?{' '}
-            </Text>
-            <Pressable onPress={() => navigation.navigate('Register')} disabled={isLoading}>
+            <Pressable onPress={() => navigation.navigate('Login')} disabled={isLoading}>
               <Text style={[styles.linkText, { color: theme.colors.primary }]}>
-                Criar conta
+                ← Voltar para login
               </Text>
             </Pressable>
           </View>
@@ -235,20 +218,21 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: 32,
   },
   logo: {
-    fontSize: 80,
-    marginBottom: 16,
+    fontSize: 60,
+    marginBottom: 12,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '700',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     textAlign: 'center',
+    paddingHorizontal: 20,
   },
   form: {
     width: '100%',
@@ -270,15 +254,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 16,
   },
-  rememberMeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  rememberMeText: {
-    fontSize: 14,
-    marginLeft: 12,
-  },
   errorContainer: {
     padding: 12,
     borderRadius: 8,
@@ -288,7 +263,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-  loginButton: {
+  successContainer: {
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+  successText: {
+    fontSize: 14,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  submitButton: {
     height: 50,
     borderRadius: 8,
     alignItems: 'center',
@@ -299,22 +284,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
-  loginButtonText: {
+  submitButtonText: {
     fontSize: 16,
     fontWeight: '600',
   },
-  forgotPasswordContainer: {
-    marginTop: 16,
-    alignItems: 'center',
-  },
   footer: {
     marginTop: 24,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footerText: {
-    fontSize: 14,
   },
   linkText: {
     fontSize: 14,

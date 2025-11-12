@@ -91,6 +91,23 @@ export interface LoginCredentials {
   rememberMe: boolean;
 }
 
+export interface RegisterCredentials {
+  name: string;
+  email: string;
+  password: string;
+  tenantName: string;
+  rememberMe: boolean;
+}
+
+export interface ForgotPasswordParams {
+  email: string;
+}
+
+export interface ResetPasswordParams {
+  token: string;
+  newPassword: string;
+}
+
 export interface AuthResponse {
   success: boolean;
   data?: {
@@ -109,6 +126,29 @@ export interface AuthResponse {
   error?: string;
 }
 
+// Invite types
+export interface InviteData {
+  id: string;
+  email: string;
+  role: string;
+  inviteUrl: string;
+  createdAt: string;
+  tenantName?: string;
+}
+
+export interface AcceptInviteParams {
+  token: string;
+  name: string;
+  password: string;
+}
+
+// Summary types
+export interface SummaryByDestination {
+  destinationId: string;
+  destinationName: string;
+  total: number;
+}
+
 // Notification types
 export interface ParsedNotification {
   description: string;
@@ -120,6 +160,10 @@ export interface ParsedNotification {
 // Navigation types
 export type RootStackParamList = {
   Login: undefined;
+  Register: undefined;
+  ForgotPassword: undefined;
+  ResetPassword: { token: string };
+  AcceptInvite: { token?: string };
   MainTabs: undefined;
   Preferences: undefined;
   EditDraft: {
@@ -129,11 +173,12 @@ export type RootStackParamList = {
     cardId: string;
     selectedDestinations: string[];
   };
+  Queue: undefined;
 };
 
 export type MainTabParamList = {
   Home: undefined;
   History: undefined;
-  Queue: undefined;
+  Summary: undefined;
 };
 
