@@ -13,12 +13,17 @@ import {
 } from '@/types';
 import {
   fetchCards,
+  createCard as apiCreateCard,
+  updateCard as apiUpdateCard,
+  getMyProfile,
   fetchUsers,
   fetchDrafts,
+  fetchEntries,
   fetchDestinations,
   createDestination as apiCreateDestination,
   submitDraft as apiSubmitDraft,
   updateDraft as apiUpdateDraft,
+  updateEntry as apiUpdateEntry,
   deleteDraft as apiDeleteDraft,
   apiLogout,
   getSummaryByDestination,
@@ -26,7 +31,7 @@ import {
 import { addToQueue, getQueue, removeFromQueue, processQueue, startNetworkMonitoring } from '@/services/queue';
 import { ensureValidDate } from '@/utils/dateUtils';
 import { getUserData, clearToken, clearAllCache, login as authLogin, register as authRegister } from '@/services/auth';
-import { getDefaultCard, saveDefaultCard } from '@/services/preferences';
+import { getDefaultCard, saveDefaultCard, getDraftOnlyMode } from '@/services/preferences';
 import { requestPermission as requestLocationPermission, getCurrentLocation } from '@/services/location';
 import { info, warn, error, LogCategory } from '@/services/logger';
 
@@ -44,6 +49,7 @@ interface AppContextType {
   defaultCardId: string | null;
   refreshKey: number;
   summaryData: SummaryByDestination[];
+  draftOnlyMode: boolean;
 
   // Ações
   setCurrentUser: (user: User) => void;
@@ -51,6 +57,8 @@ interface AppContextType {
   updateDraft: (draftId: string, data: UpdateDraftParams) => Promise<void>;
   deleteDraft: (draftId: string) => Promise<void>;
   createDestination: (name: string) => Promise<void>;
+  createCard: (params: { name: string; holder: 'Bruna' | 'Max'; color: string; isDefault?: boolean }) => Promise<void>;
+  updateCard: (cardId: string, params: { name?: string; holder?: 'Bruna' | 'Max'; color?: string; isDefault?: boolean }) => Promise<void>;
   refreshData: () => Promise<void>;
   forceRefresh: () => void;
   setSelectedMonth: (month: string) => void;
@@ -83,6 +91,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [defaultCardId, setDefaultCardId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0); // Força re-render de componentes
   const [summaryData, setSummaryData] = useState<SummaryByDestination[]>([]);
+  const [draftOnlyMode, setDraftOnlyMode] = useState(false);
 
   // Inicialização
   useEffect(() => {
@@ -92,7 +101,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   // Atualizar quando o mês muda
   useEffect(() => {
     loadDraftsForMonth(selectedMonth);
-  }, [selectedMonth]);
+  }, [selectedMonth, loadDraftsForMonth]);
 
   // Monitorar fila
   useEffect(() => {
@@ -108,7 +117,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [loadQueue]);
 
   /**
    * Inicializa o app carregando dados iniciais
@@ -134,8 +143,39 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           role: userData.role,
         });
         info(LogCategory.APP, 'Dados do usuário carregados', { userId: userData.id, tenantId: userData.tenantId });
+
+        // Se o nome estiver vazio ou for "Usuário", tentar buscar do servidor
+        if (!userData.name || userData.name.trim() === '' || userData.name === 'Usuário') {
+          info(LogCategory.APP, 'Nome do usuário vazio - buscando do servidor');
+          try {
+            const profile = await getMyProfile();
+            if (profile && profile.name) {
+              setCurrentUser(prev => prev ? { ...prev, name: profile.name } : null);
+              info(LogCategory.APP, 'Nome do usuário atualizado do servidor', { name: profile.name });
+            }
+          } catch (err) {
+            warn(LogCategory.APP, 'Erro ao buscar perfil do usuário', err);
+          }
+        }
       } else {
-        warn(LogCategory.APP, 'Nenhum dados de usuário encontrados no AsyncStorage');
+        warn(LogCategory.APP, 'Nenhum dados de usuário encontrados no AsyncStorage - tentando buscar do servidor');
+        // Tentar buscar do servidor se não tiver no AsyncStorage
+        try {
+          const profile = await getMyProfile();
+          if (profile) {
+            setCurrentUser({
+              id: profile.id,
+              name: profile.name || 'Usuário',
+              email: profile.email || '',
+              tenantId: '', // Não vem no perfil, manter vazio
+              tenantName: '',
+              role: '',
+            });
+            info(LogCategory.APP, 'Dados do usuário carregados do servidor', { userId: profile.id });
+          }
+        } catch (err) {
+          warn(LogCategory.APP, 'Erro ao buscar perfil do usuário do servidor', err);
+        }
       }
 
       // Carregar dados em paralelo (não bloquear app se falhar)
@@ -158,17 +198,21 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         try {
           info(LogCategory.API, 'Carregando dados da API', { attempt, maxAttempts: attempts });
 
-          const [cardsResponse, usersResponse, draftsResponse, destinationsResponse] = await Promise.allSettled([
+          const [cardsResponse, usersResponse, draftsResponse, entriesResponse, destinationsResponse] = await Promise.allSettled([
             fetchCards(),
             fetchUsers(),
             fetchDrafts(selectedMonth),
+            fetchEntries(selectedMonth), // Buscar entries (lançamentos confirmados) também
             fetchDestinations(),
           ]);
 
           // Processar resultados
           cardsData = cardsResponse.status === 'fulfilled' ? cardsResponse.value : [];
           usersData = usersResponse.status === 'fulfilled' ? usersResponse.value : [];
-          draftsData = draftsResponse.status === 'fulfilled' ? draftsResponse.value : [];
+          const draftsOnly = draftsResponse.status === 'fulfilled' ? draftsResponse.value : [];
+          const entriesOnly = entriesResponse.status === 'fulfilled' ? entriesResponse.value : [];
+          // Combinar drafts e entries
+          draftsData = [...draftsOnly, ...entriesOnly];
           const destinationsData = destinationsResponse.status === 'fulfilled' ? destinationsResponse.value : [];
 
           // Log dos resultados
@@ -180,14 +224,15 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             attempt,
           });
 
-          // Verificar se pelo menos cartões e usuários foram carregados
-          if (cardsData.length > 0 && usersData.length > 0) {
+          // Verificar se pelo menos cartões foram carregados (usuários é opcional - pode falhar se não for admin)
+          // fetchUsers() pode retornar array vazio se o usuário não tiver permissão admin, isso é normal
+          if (cardsData.length > 0 || attempt === attempts) {
             setCards(cardsData);
-            setUsers(usersData);
-            // Preservar timestamps originais da API
+            setUsers(usersData); // Pode ser array vazio se não tiver permissão admin
+            // Preservar timestamps originais da API, garantindo datas válidas
             setDrafts(draftsData.map(draft => ({
               ...draft,
-              timestamp: new Date(draft.timestamp) // Usar timestamp original da API
+              timestamp: ensureValidDate(draft.timestamp) // Garantir data válida (usa hoje se inválido)
             })));
             setDestinations(destinationsData);
             info(LogCategory.APP, 'Estados atualizados no contexto', {
@@ -227,6 +272,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       // Carregar/definir cartão padrão
       let savedDefaultCard = await getDefaultCard();
 
+      // Carregar modo apenas rascunhos
+      const draftOnly = await getDraftOnlyMode();
+      setDraftOnlyMode(draftOnly);
+
       // Se não tem cartão salvo e tem exatamente 1 cartão, selecionar automaticamente
       if (!savedDefaultCard && cardsData.length === 1) {
         const onlyCard = cardsData[0];
@@ -259,37 +308,58 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   /**
    * Carrega drafts para um mês específico
    */
-  const loadDraftsForMonth = async (month: string) => {
+  const loadDraftsForMonth = React.useCallback(async (month: string) => {
     try {
       setIsLoading(true);
-      const draftsData = await fetchDrafts(month);
+      // Buscar drafts e entries
+      const [draftsOnly, entriesOnly] = await Promise.all([
+        fetchDrafts(month),
+        fetchEntries(month), // Buscar entries também
+      ]);
 
-      // Preservar timestamps originais da API (não sobrescrever)
-      const draftsWithValidDates = draftsData.map(draft => ({
+      // Combinar drafts e entries
+      const allData = [...draftsOnly, ...entriesOnly];
+
+      // Preservar timestamps originais da API, garantindo datas válidas
+      const draftsWithValidDates = allData.map(draft => ({
         ...draft,
-        timestamp: new Date(draft.timestamp), // Usar timestamp original da API
+        timestamp: ensureValidDate(draft.timestamp), // Garantir data válida (usa hoje se inválido)
       }));
 
       setDrafts(draftsWithValidDates);
     } catch (err) {
-      console.error('❌ Erro ao carregar drafts:', err);
+      console.error('❌ Erro ao carregar drafts e entries:', err);
       setError('Erro ao carregar lançamentos');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   /**
    * Carrega fila de drafts pendentes
    */
-  const loadQueue = async () => {
+  const loadQueue = React.useCallback(async () => {
     try {
       const queue = await getQueue();
       setQueuedDrafts(queue);
     } catch (err) {
       console.error('❌ Erro ao carregar fila:', err);
     }
-  };
+  }, []);
+
+  /**
+   * Carrega destinations (responsáveis)
+   */
+  const loadDestinations = React.useCallback(async () => {
+    try {
+      const destinationsData = await fetchDestinations();
+      setDestinations(destinationsData);
+      info(LogCategory.API, 'Destinations carregados', { count: destinationsData.length });
+    } catch (err) {
+      error(LogCategory.API, 'Erro ao carregar destinations', err);
+      setDestinations([]);
+    }
+  }, []);
 
   /**
    * Submete um novo draft
@@ -381,9 +451,28 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       // Adicionar à lista local imediatamente para feedback
       setDrafts(prev => [tempDraft, ...prev]);
 
+      // Verificar se está em modo apenas rascunhos
+      const isDraftOnly = await getDraftOnlyMode();
+
+      if (isDraftOnly) {
+        // Modo apenas rascunhos - não enviar para API, apenas salvar localmente
+        console.log('📝 Modo apenas rascunhos ativado - salvando localmente sem enviar');
+        setDrafts(prev =>
+          prev.map(d => d.id === tempDraft.id ? { ...tempDraft, status: 'draft' } : d)
+        );
+        return; // Não enviar para API
+      }
+
       try {
+        // Enviar com isDraft=false para criar entry oficial (não rascunho)
+        // quando modo rascunho está desabilitado
+        const paramsWithDraftFlag = {
+          ...paramsWithCard,
+          isDraft: false, // Criar entry oficial, não rascunho
+        };
+
         // Tentar enviar (com cartão padrão se necessário)
-        const response = await apiSubmitDraft(paramsWithCard);
+        const response = await apiSubmitDraft(paramsWithDraftFlag);
 
         if (response.success && response.draft) {
           // Substituir draft temporário pelo real com data válida
@@ -398,28 +487,78 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           );
 
           console.log('✅ Draft enviado com sucesso');
+
+          // Recarregar dados para garantir sincronização
+          await loadDraftsForMonth(selectedMonth);
         } else {
           throw new Error(response.message || 'Falha ao enviar draft');
         }
       } catch (err: any) {
+        // Log detalhado do erro
         console.error('❌ Erro ao enviar draft:', err);
+        console.error('❌ Detalhes do erro:', {
+          message: err.message,
+          response: err.response?.data,
+          status: err.response?.status,
+          statusText: err.response?.statusText,
+        });
 
-        // Adicionar à fila offline
+        // Verificar se é erro relacionado a tenant/grupo
+        const errorMessage = err.response?.data?.error || err.message || 'Erro ao enviar';
+        const isTenantError =
+          errorMessage.includes('Tenant') ||
+          errorMessage.includes('tenant') ||
+          errorMessage.includes('grupo') ||
+          errorMessage.includes('Grupo') ||
+          err.response?.status === 401 ||
+          err.response?.status === 403;
+
+        if (isTenantError) {
+          console.error('⚠️ ERRO CRÍTICO: Problema com grupo/tenant do usuário');
+          console.error('⚠️ O usuário pode não estar associado a um grupo ou o token está inválido');
+          console.error('⚠️ Solução: Verificar se o usuário está associado a um grupo no painel administrativo');
+        }
+
+        // Criar mensagem de erro mais detalhada
+        let detailedErrorMessage = errorMessage;
+        if (err.response?.status === 401) {
+          detailedErrorMessage = 'Erro de autenticação. Faça login novamente.';
+        } else if (err.response?.status === 403) {
+          detailedErrorMessage = 'Acesso negado. Verifique se você está associado a um grupo.';
+        } else if (err.response?.status === 400) {
+          detailedErrorMessage = `Dados inválidos: ${errorMessage}`;
+        } else if (!err.response) {
+          detailedErrorMessage = 'Erro de conexão. Verifique sua internet.';
+        }
+
+        // Adicionar à fila offline para retry posterior
         const queuedDraft: Omit<QueuedDraft, 'retryCount'> = {
           ...tempDraft,
           status: 'error',
-          errorMessage: err.message || 'Erro ao enviar',
+          errorMessage: detailedErrorMessage,
         };
 
         await addToQueue(queuedDraft);
         await loadQueue();
 
-        // Atualizar status na lista
+        // IMPORTANTE: Manter o draft no estado local com status 'error'
+        // para que o usuário veja que houve problema e possa tentar novamente
         setDrafts(prev =>
-          prev.map(d => d.id === tempDraft.id ? { ...d, status: 'error' } : d)
+          prev.map(d =>
+            d.id === tempDraft.id
+              ? {
+                  ...d,
+                  status: 'error' as const,
+                  // Adicionar informações de erro se disponível
+                  ...(detailedErrorMessage && { errorMessage: detailedErrorMessage })
+                }
+              : d
+          )
         );
 
-        throw err;
+        // Não fazer throw aqui - manter o draft visível para o usuário
+        // O erro já foi logado e o draft foi marcado como erro
+        console.warn('⚠️ Draft mantido no estado local com status "error" para retry manual');
       }
     } catch (err) {
       console.error('❌ Erro ao processar draft:', err);
@@ -427,16 +566,36 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }
   };
 
+  // Flag para evitar múltiplos refreshes simultâneos
+  const isRefreshingRef = React.useRef(false);
+
   /**
-   * Recarrega todos os dados
+   * Recarrega todos os dados (versão simplificada - apenas recarrega drafts e queue)
    */
-  const refreshData = async () => {
-    info(LogCategory.APP, 'Usuário solicitou refresh manual dos dados');
-    await Promise.all([
-      initializeApp(false), // Não é primeiro login, mas força reload
-      loadQueue(),
-    ]);
-  };
+  const refreshData = React.useCallback(async () => {
+    // Evitar múltiplos refreshes simultâneos
+    if (isRefreshingRef.current) {
+      info(LogCategory.APP, 'Refresh já em andamento, ignorando...');
+      return;
+    }
+
+    isRefreshingRef.current = true;
+    info(LogCategory.APP, 'Recarregando dados');
+    try {
+      // Recarregar drafts, queue e destinations
+      await Promise.all([
+        loadQueue(),
+        loadDraftsForMonth(selectedMonth),
+        loadDestinations(),
+      ]);
+
+      info(LogCategory.APP, 'Dados recarregados com sucesso');
+    } catch (err) {
+      error(LogCategory.APP, 'Erro ao recarregar dados', err);
+    } finally {
+      isRefreshingRef.current = false;
+    }
+  }, [selectedMonth, loadDraftsForMonth, loadQueue, loadDestinations]); // Dependências
 
   /**
    * Força re-render completo de todos os componentes
@@ -597,14 +756,21 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   };
 
   /**
-   * Atualiza um draft existente
+   * Atualiza um draft ou entry existente
    */
   const updateDraft = async (draftId: string, data: UpdateDraftParams) => {
     try {
-      const response = await apiUpdateDraft(draftId, data);
+      // Verificar se é um entry (lançamento confirmado) ou draft
+      const draft = drafts.find(d => d.id === draftId);
+      const isEntry = draft?.isEntry === true;
+
+      // Usar endpoint correto baseado no tipo
+      const response = isEntry
+        ? await apiUpdateEntry(draftId, data)
+        : await apiUpdateDraft(draftId, data);
 
       if (response.success) {
-        // Atualizar draft na lista local
+        // Atualizar draft/entry na lista local
         setDrafts(prev =>
           prev.map(d =>
             d.id === draftId
@@ -613,10 +779,13 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           )
         );
 
-        console.log('✅ Draft atualizado localmente');
+        console.log(`✅ ${isEntry ? 'Entry' : 'Draft'} atualizado localmente`);
+
+        // Recarregar dados para garantir sincronização
+        await loadDraftsForMonth(selectedMonth);
       }
     } catch (error) {
-      console.error('❌ Erro ao atualizar draft:', error);
+      console.error('❌ Erro ao atualizar:', error);
       throw error;
     }
   };
@@ -632,6 +801,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       setDrafts(prev => prev.filter(d => d.id !== draftId));
 
       console.log('✅ Draft removido da lista');
+
+      // Recarregar dados para garantir sincronização
+      await loadDraftsForMonth(selectedMonth);
     } catch (error) {
       console.error('❌ Erro ao deletar draft:', error);
       throw error;
@@ -653,6 +825,58 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       info(LogCategory.API, 'Destination criado e adicionado à lista', { id: newDestination.id, name: newDestination.name });
     } catch (err) {
       error(LogCategory.API, 'Erro ao criar destination', err);
+      throw err;
+    }
+  };
+
+  /**
+   * Cria um novo cartão
+   */
+  const createCard = async (params: { name: string; holder: 'Bruna' | 'Max'; color: string; isDefault?: boolean }) => {
+    try {
+      info(LogCategory.API, 'Criando novo cartão', { name: params.name, holder: params.holder });
+
+      const newCard = await apiCreateCard(params);
+
+      // Se foi marcado como padrão, atualizar o defaultCardId
+      if (params.isDefault) {
+        await saveDefaultCard(newCard.id);
+        setDefaultCardId(newCard.id);
+      }
+
+      // Recarregar lista de cartões para garantir sincronização
+      const cardsData = await fetchCards();
+      setCards(cardsData);
+
+      info(LogCategory.API, 'Cartão criado e adicionado à lista', { id: newCard.id, name: newCard.name });
+    } catch (err) {
+      error(LogCategory.API, 'Erro ao criar cartão', err);
+      throw err;
+    }
+  };
+
+  /**
+   * Atualiza um cartão existente
+   */
+  const updateCard = async (cardId: string, params: { name?: string; holder?: 'Bruna' | 'Max'; color?: string; isDefault?: boolean }) => {
+    try {
+      info(LogCategory.API, 'Atualizando cartão', { cardId, params });
+
+      const updatedCard = await apiUpdateCard(cardId, params);
+
+      // Se foi marcado como padrão, atualizar o defaultCardId
+      if (params.isDefault) {
+        await saveDefaultCard(updatedCard.id);
+        setDefaultCardId(updatedCard.id);
+      }
+
+      // Recarregar lista de cartões para garantir sincronização
+      const cardsData = await fetchCards();
+      setCards(cardsData);
+
+      info(LogCategory.API, 'Cartão atualizado', { id: updatedCard.id, name: updatedCard.name });
+    } catch (err) {
+      error(LogCategory.API, 'Erro ao atualizar cartão', err);
       throw err;
     }
   };
@@ -687,17 +911,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   /**
    * Load summary by destination
    */
-  const loadSummary = async (month?: string) => {
+  const loadSummary = React.useCallback(async (month?: string) => {
     try {
       info(LogCategory.API, 'Loading summary by destination', { month });
-      const summary = await getSummaryByDestination(month);
-      setSummaryData(summary);
-      info(LogCategory.API, 'Summary loaded successfully', { count: summary.length });
+      const result = await getSummaryByDestination(month);
+      setSummaryData(result.data);
+      if (result.error) {
+        warn(LogCategory.API, 'Summary load warning', { error: result.error, month });
+      }
+      info(LogCategory.API, 'Summary loaded successfully', { count: result.data.length, error: result.error });
     } catch (err) {
       error(LogCategory.API, 'Error loading summary', err);
       setSummaryData([]);
     }
-  };
+  }, []);
 
   const value: AppContextType = {
     currentUser,
@@ -712,11 +939,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     defaultCardId,
     refreshKey,
     summaryData,
+    draftOnlyMode,
     setCurrentUser,
     submitNewDraft,
     updateDraft,
     deleteDraft,
     createDestination,
+    createCard,
+    updateCard,
     refreshData,
     forceRefresh,
     setSelectedMonth,

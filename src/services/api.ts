@@ -7,11 +7,11 @@ import {
   UpdateDraftParams,
   User,
   Destination,
-  RegisterCredentials,
   AuthResponse,
   ResetPasswordParams,
   InviteData,
   AcceptInviteParams,
+  SummaryByCategory,
   SummaryByDestination,
 } from '@/types';
 import { getToken, clearToken } from './auth';
@@ -21,6 +21,9 @@ const API_BASE_URL = 'https://smart.app.webmaxdigital.com';
 
 // Callback para quando token expirar (será setado pelo AppNavigator)
 let onTokenExpired: (() => void) | null = null;
+
+// Flag para evitar múltiplos logouts simultâneos
+let isLoggingOut = false;
 
 class ApiService {
   private client: AxiosInstance;
@@ -61,12 +64,26 @@ class ApiService {
       async (error) => {
         // Tratar erro 401 (token expirado) - mas apenas se não for tela de login
         if (error.response?.status === 401 && !error.config?.url?.includes('/auth/login')) {
-          console.warn('🔒 Token expirado ou inválido - fazendo logout');
-          await clearToken();
+          // Evitar múltiplos logouts simultâneos
+          if (!isLoggingOut) {
+            isLoggingOut = true;
+            console.warn('🔒 Token expirado ou inválido - fazendo logout');
 
-          // Chamar callback para redirecionar para login
-          if (onTokenExpired) {
-            onTokenExpired();
+            try {
+              await clearToken();
+
+              // Chamar callback para redirecionar para login
+              if (onTokenExpired) {
+                onTokenExpired();
+              }
+            } catch (logoutError) {
+              console.error('❌ Erro ao fazer logout:', logoutError);
+            } finally {
+              // Resetar flag após 1 segundo para permitir novo logout se necessário
+              setTimeout(() => {
+                isLoggingOut = false;
+              }, 1000);
+            }
           }
         }
 
@@ -180,6 +197,11 @@ class ApiService {
       const date = params.date || new Date();
       formData.append('date', date.toISOString());
 
+      // Enviar isDraft baseado na preferência do usuário
+      // Se isDraft não for fornecido explicitamente, usar false (criar entry oficial)
+      const isDraft = params.isDraft !== undefined ? params.isDraft : false;
+      formData.append('isDraft', isDraft.toString());
+
       const response = await this.client.post<ApiResponse<Draft>>(
         '/api/external/drafts',
         formData,
@@ -207,7 +229,7 @@ class ApiService {
       // Validar resposta
       if (!response.data) {
         console.warn('⚠️ Resposta inválida de /api/cards');
-        return this.getMockCards();
+        return [];
       }
 
       // API pode retornar { success, data } ou array direto
@@ -215,41 +237,105 @@ class ApiService {
 
       if (!Array.isArray(cardsData)) {
         console.warn('⚠️ Resposta não é array');
-        return this.getMockCards();
+        return [];
       }
 
       console.log('📇 Cartões recebidos da API:', cardsData.length, 'cartão(ões)');
       console.log('📇 IDs dos cartões:', cardsData.map((c: Card) => c.id));
 
-      return cardsData;
+      // Mapear "holder" do backend para "owner" do frontend
+      return cardsData.map((card: any) => ({
+        ...card,
+        owner: card.holder || card.owner, // Backend retorna "holder", frontend espera "owner"
+      }));
     } catch (error: any) {
-      // Se endpoint não existe ou 401, retornar mock
+      // Se endpoint não existe ou 401, retornar array vazio
       if (error.response?.status === 404 || error.response?.status === 401) {
-        console.warn('⚠️ Endpoint /api/cards não disponível - usando mock mínimo');
-        return this.getMockCards();
+        console.warn('⚠️ Endpoint /api/cards não disponível - retornando lista vazia');
+        return [];
       }
       console.error('❌ Erro ao buscar cartões:', error);
-      return this.getMockCards(); // Fallback para mock
+      return []; // Sem fallback para mock - retornar array vazio
     }
   }
 
   /**
-   * Mock mínimo de cartões para permitir configuração mesmo sem backend
+   * Cria um novo cartão
    */
-  private getMockCards(): Card[] {
-    return [
-      {
-        id: 'mock-card-1',
-        name: 'Cartão Padrão',
-        owner: 'Você',
-        isDefault: false,
-      },
-    ];
+  async createCard(params: { name: string; holder: 'Bruna' | 'Max'; color: string; isDefault?: boolean }): Promise<Card> {
+    try {
+      const response = await this.client.post<ApiResponse<Card>>('/api/cards', params);
+
+      if (!response.data || !response.data.success) {
+        throw new Error(response.data?.message || 'Erro ao criar cartão');
+      }
+
+      console.log('✅ Cartão criado com sucesso:', response.data.data);
+
+      // Mapear "holder" do backend para "owner" do frontend
+      const card = response.data.data;
+      return {
+        ...card,
+        owner: card.holder || card.owner, // Backend retorna "holder", frontend espera "owner"
+      };
+    } catch (error: any) {
+      console.error('❌ Erro ao criar cartão:', error);
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Atualiza um cartão existente
+   */
+  async updateCard(cardId: string, params: { name?: string; holder?: 'Bruna' | 'Max'; color?: string; isDefault?: boolean }): Promise<Card> {
+    try {
+      const response = await this.client.put<ApiResponse<Card>>(`/api/cards/${cardId}`, params);
+
+      if (!response.data || !response.data.success) {
+        throw new Error(response.data?.message || 'Erro ao atualizar cartão');
+      }
+
+      console.log('✅ Cartão atualizado com sucesso:', response.data.data);
+
+      // Mapear "holder" do backend para "owner" do frontend
+      const card = response.data.data;
+      return {
+        ...card,
+        owner: card.holder || card.owner, // Backend retorna "holder", frontend espera "owner"
+      };
+    } catch (error: any) {
+      console.error('❌ Erro ao atualizar cartão:', error);
+      throw this.handleError(error);
+    }
   }
 
   /**
    * Busca lista de usuários/responsáveis
    */
+  /**
+   * Busca o perfil do próprio usuário (não requer permissão admin)
+   */
+  async getMyProfile(): Promise<User | null> {
+    try {
+      const response = await this.client.get<any>('/api/users/me/profile');
+
+      if (!response.data || !response.data.success) {
+        console.warn('⚠️ Resposta inválida de /api/users/me/profile');
+        return null;
+      }
+
+      return response.data.data;
+    } catch (error: any) {
+      // Se endpoint não existe ou 401, retornar null
+      if (error.response?.status === 404 || error.response?.status === 401) {
+        console.warn('⚠️ Endpoint /api/users/me/profile não disponível');
+        return null;
+      }
+      console.error('❌ Erro ao buscar perfil do usuário:', error);
+      return null;
+    }
+  }
+
   async fetchUsers(): Promise<User[]> {
     try {
       const response = await this.client.get<any>('/api/users');
@@ -270,9 +356,10 @@ class ApiService {
 
       return usersData;
     } catch (error: any) {
-      // Se endpoint não existe ou 401, retornar array vazio
-      if (error.response?.status === 404 || error.response?.status === 401) {
-        console.warn('⚠️ Endpoint /api/users não disponível - retornando lista vazia');
+      // Se endpoint não existe, 401 ou 403 (sem permissão), retornar array vazio
+      // Este endpoint requer permissão admin, então é normal falhar para usuários viewer
+      if (error.response?.status === 404 || error.response?.status === 401 || error.response?.status === 403) {
+        console.warn('⚠️ Endpoint /api/users não disponível ou sem permissão - retornando lista vazia');
         return [];
       }
       console.error('❌ Erro ao buscar usuários:', error);
@@ -316,6 +403,56 @@ class ApiService {
   }
 
   /**
+   * Busca entries (lançamentos confirmados) de um mês específico
+   */
+  async fetchEntries(month: string): Promise<Draft[]> {
+    try {
+      const response = await this.client.get<any>('/api/entries', {
+        params: { month },
+      });
+
+      // Validar resposta
+      if (!response.data) {
+        console.warn('⚠️ Resposta inválida de /api/entries');
+        return [];
+      }
+
+      // API retorna { success: true, data: [...] }
+      const entriesData = response.data.success ? response.data.data : response.data;
+
+      if (!Array.isArray(entriesData)) {
+        console.warn('⚠️ Resposta não é array');
+        return [];
+      }
+
+      // Converter entries para formato compatível com Draft
+      // Entries têm estrutura diferente (destinations é array de IDs, não selectedDestinations)
+      return entriesData.map((entry: any) => ({
+        id: entry.id,
+        description: entry.description,
+        amount: entry.amount,
+        cardId: entry.cardId,
+        userId: '', // Entries não têm userId direto
+        status: 'sent' as const, // Entries são sempre confirmados
+        timestamp: new Date(entry.createdAt),
+        selectedDestinations: entry.destinations || [],
+        month: entry.month,
+        destinationSplits: entry.destinationSplits,
+        observations: entry.observations,
+        isEntry: true, // Flag para identificar que é entry, não draft
+      }));
+    } catch (error: any) {
+      // Se endpoint não existe ou 401, retornar array vazio
+      if (error.response?.status === 404 || error.response?.status === 401) {
+        console.warn('⚠️ Endpoint /api/entries não disponível - retornando lista vazia');
+        return [];
+      }
+      console.error('❌ Erro ao buscar entries:', error);
+      return []; // Fallback seguro
+    }
+  }
+
+  /**
    * Atualiza um draft existente
    */
   async updateDraft(draftId: string, data: UpdateDraftParams): Promise<ApiResponse<Draft>> {
@@ -341,6 +478,38 @@ class ApiService {
   }
 
   /**
+   * Atualiza um entry (lançamento confirmado) existente
+   */
+  async updateEntry(entryId: string, data: UpdateDraftParams): Promise<ApiResponse<Draft>> {
+    try {
+      console.log('📝 Atualizando entry:', entryId, data);
+
+      // Converter selectedDestinations para destinations (formato esperado pelo endpoint de entries)
+      const updateData: any = { ...data };
+      if (data.selectedDestinations) {
+        updateData.destinations = data.selectedDestinations;
+        delete updateData.selectedDestinations;
+      }
+
+      const response = await this.client.put<ApiResponse<Draft>>(
+        `/api/entries/${entryId}`,
+        updateData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      console.log('✅ Entry atualizado com sucesso');
+      return response.data;
+    } catch (error) {
+      console.error('❌ Erro ao atualizar entry:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Deleta um draft
    */
   async deleteDraft(draftId: string): Promise<ApiResponse> {
@@ -359,43 +528,6 @@ class ApiService {
     }
   }
 
-  /**
-   * Register new user with new tenant
-   */
-  async register(credentials: RegisterCredentials): Promise<AuthResponse> {
-    try {
-      console.log('📝 Registering new user...');
-
-      const response = await this.client.post<AuthResponse>(
-        '/api/auth/register',
-        {
-          name: credentials.name,
-          email: credentials.email,
-          password: credentials.password,
-          tenantName: credentials.tenantName,
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      console.log('✅ Registration successful');
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Registration error:', error);
-
-      if (error.response?.data) {
-        return error.response.data;
-      }
-
-      return {
-        success: false,
-        error: 'Erro ao conectar com o servidor',
-      };
-    }
-  }
 
   /**
    * Request password reset
@@ -717,9 +849,51 @@ class ApiService {
   }
 
   /**
+   * Get summary by category
+   */
+  async getSummaryByCategory(month?: string): Promise<{ data: SummaryByCategory[]; error?: string }> {
+    try {
+      console.log('📊 Fetching summary by category...', { month });
+
+      const params: any = {};
+      if (month) {
+        params.month = month;
+      }
+
+      const response = await this.client.get<{ success: boolean; data: SummaryByCategory[] }>(
+        '/api/entries/summary-by-category',
+        { params }
+      );
+
+      if (response.data.success && response.data.data) {
+        console.log('✅ Category summary loaded:', response.data.data.length, 'categories');
+        return { data: response.data.data };
+      }
+
+      if (response.data.success === false) {
+        console.warn('⚠️ Endpoint retornou success: false');
+        return { data: [], error: 'Endpoint retornou erro' };
+      }
+
+      return { data: [] };
+    } catch (error: any) {
+      console.error('❌ Error fetching category summary:', error);
+
+      if (error.response?.status === 404) {
+        return { data: [], error: 'Endpoint não disponível' };
+      }
+      if (error.response?.status === 401) {
+        return { data: [], error: 'Não autenticado' };
+      }
+
+      return { data: [], error: 'Erro ao carregar resumo por categoria' };
+    }
+  }
+
+  /**
    * Get summary by destination (person)
    */
-  async getSummaryByDestination(month?: string): Promise<SummaryByDestination[]> {
+  async getSummaryByDestination(month?: string): Promise<{ data: SummaryByDestination[]; error?: string }> {
     try {
       console.log('📊 Fetching summary by destination...', { month });
 
@@ -729,19 +903,217 @@ class ApiService {
       }
 
       const response = await this.client.get<{ success: boolean; data: SummaryByDestination[] }>(
-        '/api/entries/summary-by-destination',
+        '/api/external/entries/summary-by-destination',
         { params }
       );
 
       if (response.data.success && response.data.data) {
         console.log('✅ Summary loaded:', response.data.data.length, 'destinations');
-        return response.data.data;
+        return { data: response.data.data };
       }
 
-      return [];
+      // Se success é false ou data não existe, pode ser que não há dados ou endpoint não está disponível
+      if (response.data.success === false) {
+        console.warn('⚠️ Endpoint retornou success: false');
+        return { data: [], error: 'Endpoint retornou erro' };
+      }
+
+      return { data: [] };
     } catch (error: any) {
       console.error('❌ Error fetching summary:', error);
-      return [];
+
+      // Verificar se é erro 404 (endpoint não existe) ou 401 (não autenticado)
+      if (error.response?.status === 404) {
+        return { data: [], error: 'Endpoint não disponível' };
+      }
+      if (error.response?.status === 401) {
+        return { data: [], error: 'Não autenticado' };
+      }
+
+      // Erro de rede (offline)
+      if (!error.response) {
+        return { data: [], error: 'Erro de conexão. Verifique sua internet.' };
+      }
+
+      return { data: [], error: 'Erro ao carregar resumo' };
+    }
+  }
+
+  /**
+   * Busca metadata de estabelecimento por nome de exibição
+   */
+  async getMetadataByDisplayName(displayName: string): Promise<ApiResponse<{ category?: string; id?: string } | null>> {
+    try {
+      const response = await this.client.get<ApiResponse<{ category?: string; id?: string } | null>>(
+        '/api/entry-metadata/by-display-name',
+        { params: { displayName } }
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Erro ao buscar metadata:', error);
+      return { success: false, message: 'Erro ao buscar categoria' };
+    }
+  }
+
+  /**
+   * Busca todas as categorias disponíveis (extrai de todos os metadados)
+   */
+  async getAllCategories(): Promise<string[]> {
+    try {
+      const response = await this.client.get<ApiResponse<Array<{
+        normalizedName: string;
+        displayName: string;
+        entryCount: number;
+        metadata: {
+          category?: string;
+        } | null;
+      }>>>('/api/entry-metadata');
+
+      if (response.data.success && response.data.data) {
+        // Extrair categorias únicas e não vazias
+        const categories = new Set<string>();
+        response.data.data.forEach(item => {
+          if (item.metadata?.category && item.metadata.category.trim()) {
+            categories.add(item.metadata.category.trim());
+          }
+        });
+
+        // Ordenar alfabeticamente
+        const sortedCategories = Array.from(categories).sort();
+
+        // Adicionar categorias padrão se não existirem
+        const defaultCategories = [
+          'Alimentação',
+          'Serviço',
+          'Transporte',
+          'Moradia',
+          'Educação',
+          'Saúde',
+          'Lazer',
+          'Compras',
+          'Outros',
+        ];
+
+        defaultCategories.forEach(cat => {
+          if (!sortedCategories.includes(cat)) {
+            sortedCategories.push(cat);
+          }
+        });
+
+        return sortedCategories;
+      }
+
+      // Se não houver dados, retornar categorias padrão
+      return [
+        'Alimentação',
+        'Serviço',
+        'Transporte',
+        'Moradia',
+        'Educação',
+        'Saúde',
+        'Lazer',
+        'Compras',
+        'Outros',
+      ];
+    } catch (error: any) {
+      console.error('❌ Erro ao buscar categorias:', error);
+      // Retornar categorias padrão em caso de erro
+      return [
+        'Alimentação',
+        'Serviço',
+        'Transporte',
+        'Moradia',
+        'Educação',
+        'Saúde',
+        'Lazer',
+        'Compras',
+        'Outros',
+      ];
+    }
+  }
+
+  /**
+   * Cria ou atualiza metadata de estabelecimento
+   */
+  async upsertMetadata(data: { displayName: string; normalizedName?: string; category?: string }): Promise<ApiResponse> {
+    try {
+      const response = await this.client.post<ApiResponse>(
+        '/api/entry-metadata',
+        data,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Erro ao atualizar metadata:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Envia feedback do usuário (áudio ou texto)
+   */
+  async submitFeedback(params: { audio?: { uri: string; name: string; type: string }; text?: string }): Promise<ApiResponse> {
+    try {
+      const formData = new FormData();
+
+      // Adicionar áudio se fornecido
+      if (params.audio) {
+        const audioFile = {
+          uri: params.audio.uri,
+          name: params.audio.name,
+          type: params.audio.type,
+        } as any;
+        formData.append('audio', audioFile);
+      }
+
+      // Adicionar texto se fornecido
+      if (params.text) {
+        formData.append('text', params.text);
+      }
+
+      const response = await this.client.post<ApiResponse>(
+        '/api/feedback',
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Erro ao enviar feedback:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Envia votação de features
+   */
+  async submitFeatureVote(params: { selectedFeatures: string[]; suggestion?: string }): Promise<ApiResponse> {
+    try {
+      const response = await this.client.post<ApiResponse>(
+        '/api/feedback/vote',
+        {
+          selectedFeatures: params.selectedFeatures,
+          suggestion: params.suggestion || undefined,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Erro ao enviar votação:', error);
+      throw error;
     }
   }
 
@@ -753,17 +1125,21 @@ export const api = new ApiService();
 // Exportar funções principais para facilitar imports
 export const submitDraft = (params: SubmitDraftParams) => api.submitDraft(params);
 export const fetchCards = () => api.fetchCards();
+export const createCard = (params: { name: string; holder: 'Bruna' | 'Max'; color: string; isDefault?: boolean }) => api.createCard(params);
+export const updateCard = (cardId: string, params: { name?: string; holder?: 'Bruna' | 'Max'; color?: string; isDefault?: boolean }) => api.updateCard(cardId, params);
+export const getMyProfile = () => api.getMyProfile();
 export const fetchUsers = () => api.fetchUsers();
 export const fetchDrafts = (month: string) => api.fetchDrafts(month);
+export const fetchEntries = (month: string) => api.fetchEntries(month);
 export const fetchDestinations = () => api.fetchDestinations();
 export const createDestination = (name: string) => api.createDestination(name);
 export const updateDraft = (draftId: string, data: UpdateDraftParams) => api.updateDraft(draftId, data);
+export const updateEntry = (entryId: string, data: UpdateDraftParams) => api.updateEntry(entryId, data);
 export const deleteDraft = (draftId: string) => api.deleteDraft(draftId);
 export const apiLogout = () => api.logout();
 export const setOnTokenExpired = (callback: () => void) => api.setOnTokenExpired(callback);
 
-// Auth methods
-export const apiRegister = (credentials: RegisterCredentials) => api.register(credentials);
+// Auth methods (register está em auth.ts para evitar require cycle)
 export const apiForgotPassword = (email: string) => api.forgotPassword(email);
 export const apiVerifyResetToken = (token: string) => api.verifyResetToken(token);
 export const apiResetPassword = (params: ResetPasswordParams) => api.resetPassword(params);
@@ -776,5 +1152,15 @@ export const apiVerifyInviteToken = (token: string) => api.verifyInviteToken(tok
 export const apiAcceptInvite = (params: AcceptInviteParams) => api.acceptInvite(params);
 
 // Summary methods
+export const getSummaryByCategory = (month?: string) => api.getSummaryByCategory(month);
 export const getSummaryByDestination = (month?: string) => api.getSummaryByDestination(month);
+
+// Entry Metadata methods
+export const getMetadataByDisplayName = (displayName: string) => api.getMetadataByDisplayName(displayName);
+export const getAllCategories = () => api.getAllCategories();
+export const upsertMetadata = (data: { displayName: string; normalizedName?: string; category?: string }) => api.upsertMetadata(data);
+
+// Feedback methods
+export const submitFeedback = (params: { audio?: { uri: string; name: string; type: string }; text?: string }) => api.submitFeedback(params);
+export const submitFeatureVote = (params: { selectedFeatures: string[]; suggestion?: string }) => api.submitFeatureVote(params);
 
