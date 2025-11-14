@@ -6,6 +6,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { useTheme } from '@/theme';
 import { isAuthenticated } from '@/services/auth';
 import { setOnTokenExpired } from '@/services/api';
+import { getOnboardingCompleted } from '@/services/preferences';
 
 // Screens
 import { LoginScreen } from '@/screens/LoginScreen';
@@ -13,12 +14,14 @@ import { RegisterScreen } from '@/screens/RegisterScreen';
 import { ForgotPasswordScreen } from '@/screens/ForgotPasswordScreen';
 import { ResetPasswordScreen } from '@/screens/ResetPasswordScreen';
 import { AcceptInviteScreen } from '@/screens/AcceptInviteScreen';
+import { OnboardingScreen } from '@/screens/OnboardingScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { HistoryScreen } from '@/screens/HistoryScreen';
 import { QueueScreen } from '@/screens/QueueScreen';
 import { SummaryScreen } from '@/screens/SummaryScreen';
 import { PreferencesScreen } from '@/screens/PreferencesScreen';
 import { EditDraftScreen } from '@/screens/EditDraftScreen';
+import { FeedbackScreen } from '@/screens/FeedbackScreen';
 
 // Types
 import { MainTabParamList, RootStackParamList } from '@/types';
@@ -32,6 +35,7 @@ const getTabIcon = (routeName: string, focused: boolean) => {
     Home: focused ? '🏠' : '🏡',
     History: focused ? '📊' : '📈',
     Summary: focused ? '💰' : '💵',
+    Feedback: focused ? '💬' : '💭',
   };
   return icons[routeName as keyof typeof icons] || '📱';
 };
@@ -83,6 +87,14 @@ const MainTabs = () => {
           headerShown: false,
         }}
       />
+      <Tab.Screen
+        name="Feedback"
+        component={FeedbackScreen}
+        options={{
+          tabBarLabel: 'Feedback',
+          headerShown: false,
+        }}
+      />
     </Tab.Navigator>
   );
 };
@@ -92,16 +104,42 @@ export const AppNavigator = () => {
   const [isAuth, setIsAuth] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [navigationReady, setNavigationReady] = useState(false);
+  const [onboardingCompleted, setOnboardingCompleted] = useState<boolean | null>(null);
 
-  // Verificar autenticação no mount e periodicamente
+  // Verificar autenticação e onboarding no mount
   useEffect(() => {
     checkAuth();
+    checkOnboarding();
 
     // Verificar auth a cada 1 segundo (detectar login/logout mais rapidamente)
-    const interval = setInterval(checkAuth, 1000);
+    const authInterval = setInterval(checkAuth, 1000);
 
-    return () => clearInterval(interval);
-  }, []);
+    // Verificar onboarding apenas quando necessário (não a cada segundo)
+    // Verificar novamente quando auth mudar (após login)
+    const onboardingCheckInterval = setInterval(() => {
+      // Só verificar se ainda não foi completado ou se auth mudou
+      if (onboardingCompleted === null || onboardingCompleted === false) {
+        checkOnboarding();
+      }
+    }, 2000); // Verificar a cada 2 segundos apenas se necessário
+
+    return () => {
+      clearInterval(authInterval);
+      clearInterval(onboardingCheckInterval);
+    };
+  }, [onboardingCompleted]);
+
+  const checkOnboarding = async () => {
+    try {
+      const completed = await getOnboardingCompleted();
+      // Só atualizar se o valor mudou para evitar re-renders desnecessários
+      setOnboardingCompleted(prev => prev !== completed ? completed : prev);
+    } catch (error) {
+      console.error('Erro ao verificar onboarding:', error);
+      // Em caso de erro, assumir que não foi completado (mais seguro)
+      setOnboardingCompleted(false);
+    }
+  };
 
   // Configurar callback de token expirado
   useEffect(() => {
@@ -120,6 +158,14 @@ export const AppNavigator = () => {
       // Só logar quando mudar de estado
       if (authenticated !== isAuth && !isChecking) {
         console.log('🔐 Status de autenticação mudou:', authenticated);
+
+        // Se acabou de autenticar, verificar onboarding novamente
+        if (authenticated) {
+          checkOnboarding();
+        }
+
+        // Se acabou de autenticar, os dados serão recarregados pelo AppContext
+        // O AppContext já tem lógica de recarregamento após login
       }
 
       setIsAuth(authenticated);
@@ -131,8 +177,8 @@ export const AppNavigator = () => {
     }
   };
 
-  // Loading screen enquanto verifica autenticação
-  if (isChecking) {
+  // Loading screen enquanto verifica autenticação e onboarding
+  if (isChecking || onboardingCompleted === null) {
     return (
       <View
         style={{
@@ -162,6 +208,7 @@ export const AppNavigator = () => {
             Home: 'home',
             History: 'history',
             Summary: 'summary',
+            Feedback: 'feedback',
           },
         },
       },
@@ -180,38 +227,47 @@ export const AppNavigator = () => {
         }}
       >
         {isAuth ? (
-          // Usuário autenticado - mostrar app
-          <>
+          // Usuário autenticado - verificar onboarding
+          onboardingCompleted ? (
+            <>
+              <Stack.Screen
+                name="MainTabs"
+                component={MainTabs}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="EditDraft"
+                component={EditDraftScreen}
+                options={{
+                  title: 'Editar Lançamento',
+                  headerBackTitle: 'Voltar',
+                }}
+              />
+              <Stack.Screen
+                name="Preferences"
+                component={PreferencesScreen}
+                options={{
+                  presentation: 'modal',
+                  title: 'Preferências',
+                }}
+              />
+              <Stack.Screen
+                name="Queue"
+                component={QueueScreen}
+                options={{
+                  title: 'Fila de Sincronização',
+                  headerBackTitle: 'Voltar',
+                }}
+              />
+            </>
+          ) : (
+            // Onboarding não completado - mostrar tela de onboarding
             <Stack.Screen
-              name="MainTabs"
-              component={MainTabs}
+              name="Onboarding"
+              component={OnboardingScreen}
               options={{ headerShown: false }}
             />
-            <Stack.Screen
-              name="EditDraft"
-              component={EditDraftScreen}
-              options={{
-                title: 'Editar Lançamento',
-                headerBackTitle: 'Voltar',
-              }}
-            />
-            <Stack.Screen
-              name="Preferences"
-              component={PreferencesScreen}
-              options={{
-                presentation: 'modal',
-                title: 'Preferências',
-              }}
-            />
-            <Stack.Screen
-              name="Queue"
-              component={QueueScreen}
-              options={{
-                title: 'Fila de Sincronização',
-                headerBackTitle: 'Voltar',
-              }}
-            />
-          </>
+          )
         ) : (
           // Usuário não autenticado - mostrar login e telas públicas
           <>
