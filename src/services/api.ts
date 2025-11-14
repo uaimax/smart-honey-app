@@ -390,7 +390,11 @@ class ApiService {
         return [];
       }
 
-      return draftsData;
+      // Converter timestamps de string para Date
+      return draftsData.map((draft: any) => ({
+        ...draft,
+        timestamp: draft.createdAt ? new Date(draft.createdAt) : new Date(draft.timestamp || Date.now()),
+      }));
     } catch (error: any) {
       // Se endpoint não existe ou 401, retornar array vazio
       if (error.response?.status === 404 || error.response?.status === 401) {
