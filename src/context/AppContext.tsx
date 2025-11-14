@@ -224,23 +224,26 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             attempt,
           });
 
-          // Verificar se pelo menos cartões foram carregados (usuários é opcional - pode falhar se não for admin)
-          // fetchUsers() pode retornar array vazio se o usuário não tiver permissão admin, isso é normal
-          if (cardsData.length > 0 || attempt === attempts) {
-            setCards(cardsData);
-            setUsers(usersData); // Pode ser array vazio se não tiver permissão admin
-            // Preservar timestamps originais da API, garantindo datas válidas
-            setDrafts(draftsData.map(draft => ({
-              ...draft,
-              timestamp: ensureValidDate(draft.timestamp) // Garantir data válida (usa hoje se inválido)
-            })));
-            setDestinations(destinationsData);
-            info(LogCategory.APP, 'Estados atualizados no contexto', {
-              cards: cardsData.length,
-              users: usersData.length,
-              drafts: draftsData.length,
-              destinations: destinationsData.length,
-            });
+          // Sempre atualizar estados, mesmo se alguns dados estiverem vazios
+          // Isso garante que o app não fique travado esperando dados que podem não existir
+          setCards(cardsData);
+          setUsers(usersData); // Pode ser array vazio se não tiver permissão admin
+          // Preservar timestamps originais da API, garantindo datas válidas
+          setDrafts(draftsData.map(draft => ({
+            ...draft,
+            timestamp: ensureValidDate(draft.timestamp) // Garantir data válida (usa hoje se inválido)
+          })));
+          setDestinations(destinationsData);
+          info(LogCategory.APP, 'Estados atualizados no contexto', {
+            cards: cardsData.length,
+            users: usersData.length,
+            drafts: draftsData.length,
+            destinations: destinationsData.length,
+          });
+          
+          // Considerar sucesso se pelo menos drafts ou destinations foram carregados
+          // (cartões podem estar vazios se o tenant não tiver cartões ainda)
+          if (draftsData.length > 0 || destinationsData.length > 0 || attempt === attempts) {
             success = true;
             break;
           } else if (attempt < attempts) {
@@ -248,6 +251,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
               attempt,
               cardsCount: cardsData.length,
               usersCount: usersData.length,
+              draftsCount: draftsData.length,
+              destinationsCount: destinationsData.length,
             });
             // Aguardar antes de tentar novamente
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -570,7 +575,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const isRefreshingRef = React.useRef(false);
 
   /**
-   * Recarrega todos os dados (versão simplificada - apenas recarrega drafts e queue)
+   * Recarrega todos os dados (drafts, queue, destinations, cards e nome do usuário)
    */
   const refreshData = React.useCallback(async () => {
     // Evitar múltiplos refreshes simultâneos
@@ -582,11 +587,50 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     isRefreshingRef.current = true;
     info(LogCategory.APP, 'Recarregando dados');
     try {
-      // Recarregar drafts, queue e destinations
+      // Recarregar cartões, destinations, drafts, queue e nome do usuário
+      const [cardsResponse, destinationsResponse] = await Promise.allSettled([
+        fetchCards(),
+        fetchDestinations(),
+      ]);
+
+      // Atualizar cartões
+      if (cardsResponse.status === 'fulfilled') {
+        const cardsData = cardsResponse.value;
+        setCards(cardsData.map((card: any) => ({
+          ...card,
+          owner: card.holder || card.owner,
+        })));
+        info(LogCategory.APP, 'Cartões recarregados', { count: cardsData.length });
+      } else {
+        warn(LogCategory.APP, 'Erro ao recarregar cartões', cardsResponse.status === 'rejected' ? cardsResponse.reason : 'unknown');
+      }
+
+      // Atualizar destinations
+      if (destinationsResponse.status === 'fulfilled') {
+        setDestinations(destinationsResponse.value);
+        info(LogCategory.APP, 'Destinations recarregados', { count: destinationsResponse.value.length });
+      } else {
+        warn(LogCategory.APP, 'Erro ao recarregar destinations', destinationsResponse.status === 'rejected' ? destinationsResponse.reason : 'unknown');
+      }
+
+      // Atualizar nome do usuário se necessário
+      const userData = await getUserData();
+      if (userData && (!userData.name || userData.name.trim() === '' || userData.name === 'Usuário')) {
+        try {
+          const profile = await getMyProfile();
+          if (profile && profile.name) {
+            setCurrentUser(prev => prev ? { ...prev, name: profile.name } : null);
+            info(LogCategory.APP, 'Nome do usuário atualizado', { name: profile.name });
+          }
+        } catch (err) {
+          warn(LogCategory.APP, 'Erro ao buscar perfil do usuário', err);
+        }
+      }
+
+      // Recarregar drafts e queue
       await Promise.all([
         loadQueue(),
         loadDraftsForMonth(selectedMonth),
-        loadDestinations(),
       ]);
 
       info(LogCategory.APP, 'Dados recarregados com sucesso');
@@ -595,7 +639,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     } finally {
       isRefreshingRef.current = false;
     }
-  }, [selectedMonth, loadDraftsForMonth, loadQueue, loadDestinations]); // Dependências
+  }, [selectedMonth, loadDraftsForMonth, loadQueue]); // Dependências
 
   /**
    * Força re-render completo de todos os componentes
@@ -639,6 +683,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             });
           }
 
+          // Aguardar um pouco para garantir que o token foi salvo no AsyncStorage
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
           // Forçar reload completo dos dados com retry
           await Promise.all([
             initializeApp(true, false), // Primeiro login com retry, sem gerenciar loading
@@ -648,7 +695,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           info(LogCategory.AUTH, 'Dados recarregados após login com sucesso');
 
           // Aguardar um tick para garantir que React processou as atualizações de estado
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, 200));
+
+          // Forçar refresh adicional para garantir que cartões e nome foram carregados
+          await refreshData();
 
           // Forçar re-render completo
           forceRefresh();
